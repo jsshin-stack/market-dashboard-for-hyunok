@@ -12,19 +12,6 @@ async function fetchSeries(symbol, apiKey, size = 260) {
   const closes = d.values.map((v) => parseFloat(v.close)).filter((n) => !isNaN(n));
   return { closes, values: d.values };
 }
-// 실시간 최신가(/quote): 일봉 확정 전에도 최신 종가를 반환
-async function fetchLatest(symbol, apiKey) {
-  try {
-    const r = await fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol)}&timezone=America/New_York&apikey=${apiKey}`);
-    const q = await r.json();
-    if (q && q.close && q.datetime) {
-      const c = parseFloat(q.close);
-      if (!isNaN(c)) return { close: c, datetime: q.datetime };
-    }
-  } catch (e) { /* noop */ }
-  return null;
-}
-
 function avg(arr) { return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null; }
 
 export default async function handler(req, res) {
@@ -48,15 +35,8 @@ export default async function handler(req, res) {
         if (!r.error && r.closes && r.closes.length > maWin / 2) { s = r; usedSym = sym; break; }
       }
       if (!s) { out.idx[key] = { error: "지수/프록시 모두 접근 불가" }; continue; }
-      let close = s.closes[0];
-      let asOf = s.values[0] ? s.values[0].datetime : null;
-      // 실시간 최신가 보정: 일봉이 /quote보다 과거면 최신가로 갱신
-      const latest = await fetchLatest(usedSym, apiKey);
-      if (latest && (!asOf || latest.datetime >= asOf)) {
-        if (latest.datetime > asOf) s.closes.unshift(latest.close);
-        else s.closes[0] = latest.close;
-        close = latest.close; asOf = latest.datetime;
-      }
+      const close = s.closes[0];
+      const asOf = s.values[0] ? s.values[0].datetime : null;
       const prevDay = s.closes[1];
       const prevWeek = s.closes[5] || null, prevMonth = s.closes[21] || null;
       const maVal = avg(s.closes.slice(0, maWin));

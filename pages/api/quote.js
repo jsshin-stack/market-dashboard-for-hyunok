@@ -48,23 +48,6 @@ export default async function handler(req, res) {
       let latestDate = tsData.values[0] ? tsData.values[0].datetime : null;
       const prevClose = closes[1];
 
-      // 실시간 종가 보정: /quote는 일봉 확정 전에도 최신가를 준다.
-      // time_series의 최신 일봉이 /quote보다 과거면, 최신가를 앞에 끼워 넣는다.
-      try {
-        const qResp = await fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(sym)}&timezone=America/New_York&apikey=${apiKey}`);
-        const q = await qResp.json();
-        if (q && q.close && q.datetime) {
-          const qClose = parseFloat(q.close);
-          // q.datetime이 최신 일봉 날짜보다 뒤(더 최근)면 최신가로 갱신
-          if (!isNaN(qClose) && (!latestDate || q.datetime >= latestDate)) {
-            if (q.datetime > latestDate) { closes.unshift(qClose); highs.unshift(parseFloat(q.high) || qClose); vols.unshift(parseFloat(q.volume) || vols[0]); }
-            else { closes[0] = qClose; }
-            close = qClose;
-            latestDate = q.datetime;
-          }
-        }
-      } catch (e) { /* quote 실패 시 일봉 그대로 사용 */ }
-
       const ma200arr = closes.slice(0, 200);
       const ma200 = ma200arr.length ? ma200arr.reduce((a, b) => a + b, 0) / ma200arr.length : null;
       const ma20arr = closes.slice(0, 20);

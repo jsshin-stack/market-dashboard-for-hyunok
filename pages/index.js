@@ -853,7 +853,9 @@ function IndexCard({ k, d }) {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: 22, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" }}>{fmt(d.close)}</div>
-            <div style={{ fontSize: 11, color: C.dim }}>6/15 종가</div>
+            <div style={{ fontSize: 11, color: C.dim }}>
+              {d.asOf ? `${d.asOf} 종가` : "종가"}{d._proxy ? ` · ${d._proxy} 기준` : ""}
+            </div>
           </div>
         </div>
 
@@ -1015,6 +1017,29 @@ export default function App() {
   const [tab, setTab] = useState("overview");
   const [ovQuery, setOvQuery] = useState("");
   const [ovSelected, setOvSelected] = useState(null);
+  const [ovLoading, setOvLoading] = useState(false);   // 개별 종목 조회 중
+  const [ovMsg, setOvMsg] = useState("");
+
+  // 종목 1개만 실시간 조회 (검색→선택 시 호출, 한도 절약)
+  async function fetchOne(ticker) {
+    const tk = ticker.trim().toUpperCase();
+    if (!tk) return;
+    setOvLoading(true);
+    setOvMsg(`${tk} 실시간 조회 중…`);
+    try {
+      const resp = await fetch(`/api/quote?symbols=${encodeURIComponent(tk)}`);
+      const json = await resp.json();
+      const d = json && json.data && json.data[tk];
+      if (resp.ok && d && !d.error) {
+        setLive((prev) => ({ ...prev, [tk]: d }));
+        setOvMsg(`${tk} 갱신 완료 (${d.asOf || "최신"} 기준)`);
+      } else {
+        setOvMsg(`${tk} 조회 실패: ${(d && d.error) || "데이터 없음"} — 티커를 확인하거나 잠시 후 다시 시도하세요.`);
+      }
+    } catch (e) {
+      setOvMsg(`${tk} 조회 오류: ${e.message}`);
+    } finally { setOvLoading(false); }
+  }
   // 백테스트 입력 상태
   const [btTicker, setBtTicker] = useState("NVDA");
   const [btStart, setBtStart] = useState("2025-06-23");
@@ -1039,8 +1064,9 @@ export default function App() {
       ["NDX", "SPX"].forEach((k) => {
         const d = liveIdx[k];
         if (!d || d.error) return;
-        if (d.isProxy) base[k] = { ...base[k], gapPct: d.gapPct ?? base[k].gapPct, slopePct: d.slopePct ?? base[k].slopePct, _proxy: d.source };
-        else base[k] = { ...base[k], ...d };
+        // 프록시(QQQ/SPY)든 실제 지수든 받아온 값을 모두 반영한다.
+        // 프록시는 가격 스케일이 다르므로 _proxy 라벨로 출처를 표시.
+        base[k] = { ...base[k], ...d, _proxy: d.isProxy ? d.source : null };
       });
     }
     return base;
@@ -1066,15 +1092,25 @@ export default function App() {
         if (mJson.confirm && Object.keys(mJson.confirm).length) setLiveConf(mJson.confirm);
       } else idxNote = "지수=API오류";
     } catch (e) { idxNote = "지수=네트워크오류"; }
+    // 매크로(지수·지표)에서 이미 여러 호출을 썼으므로, 종목 호출 전 잠시 대기
+    setLiveMsg("지수·지표 갱신 완료 · 종목 데이터 준비 중 (API 한도 보호 대기)…");
+    await new Promise((r) => setTimeout(r, 15000));
     try {
       const merged = { ...live };
-      for (let i = 0; i < symbols.length; i += 8) {
-        const batch = symbols.slice(i, i + 8);
+      const BATCH = 6;                       // QQQ(1)+6종목=7 → 분당 8회 한도 이내
+      const batches = Math.ceil(symbols.length / BATCH);
+      for (let i = 0; i < symbols.length; i += BATCH) {
+        const batch = symbols.slice(i, i + BATCH);
         const resp = await fetch(`/api/quote?symbols=${encodeURIComponent(batch.join(","))}`);
         const json = await resp.json();
         if (resp.ok && json.data) Object.entries(json.data).forEach(([sym, d]) => { if (!d.error) { merged[sym] = d; stockOk++; } });
         setLive({ ...merged });
         setLiveMsg(`갱신 중… 종목 ${stockOk}개 완료`);
+        // 다음 배치가 남았으면 분당 호출 제한(8회/분)을 피하려 잠시 대기
+        if (i + BATCH < symbols.length) {
+          setLiveMsg(`갱신 중… 종목 ${stockOk}개 · API 한도 보호로 60초 대기 (남은 배치 ${batches - (i / BATCH + 1)}개)`);
+          await new Promise((r) => setTimeout(r, 60000));
+        }
       }
       setLiveMsg(`갱신 완료 · 종목 ${stockOk}개 · ${idxNote || "지수=미확인"} · ${new Date().toLocaleTimeString("ko-KR")}`);
       setLastUpdated(new Date());
@@ -1112,7 +1148,12 @@ export default function App() {
   const ovFound = ovQuery.trim()
     ? allStocks.filter((s) => s.t.toLowerCase().includes(ovQuery.trim().toLowerCase()))
     : [];
-  const ovSelectedStock = ovSelected ? allStocks.find((s) => s.t === ovSelected) : null;
+  const ovSelectedStock = ovSelected
+    ? (allStocks.find((s) => s.t === ovSelected)
+        || (live[ovSelected]
+            ? { t: ovSelected, name: ovSelected, sector: "직접 조회", color: "#8B97A8", ...live[ovSelected], analyzed: true, note: "실시간 데이터 기반 계산." }
+            : { t: ovSelected, name: ovSelected, sector: "직접 조회", color: "#8B97A8", c: null, score: null, pull: null, analyzed: false, note: "조회 중이거나 데이터가 없습니다." }))
+    : null;
 
   const TABS = [
     { id: "overview", label: "종합", icon: Gauge },
@@ -1178,7 +1219,7 @@ export default function App() {
           </div>
           <button
             onClick={() => {
-              const targets = ranked.slice(0, 24).map((s) => s.t);
+              const targets = ranked.slice(0, 12).map((s) => s.t);
               refreshLive(targets.length ? targets : ["NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "AVGO", "COST"]);
             }}
             disabled={loading}
@@ -1199,7 +1240,7 @@ export default function App() {
         <div style={{ fontSize: 10.5, color: liveMsg.includes("실패") ? C.down : C.dim, marginBottom: 18, lineHeight: 1.5, padding: "8px 11px", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           {liveMsg
             ? <>↻ {liveMsg}</>
-            : <>↻ <b style={{ color: C.sub }}>실데이터 갱신</b>: 지수(NDX·SPX)·확인지표(VIX·HYG·12M ROC)·상위 24개 종목의 실제 시세를 가져와 C1~C7 점수를 다시 계산합니다.</>}
+            : <>↻ <b style={{ color: C.sub }}>실데이터 갱신</b>: 지수(NDX·SPX)·확인지표(VIX·HYG·12M ROC)·상위 12개 종목의 실제 시세로 C1~C7을 다시 계산합니다. 무료 플랜의 분당 호출 제한(8회/분) 때문에 종목은 6개씩 나눠 받으며, 배치 사이 약 60초 대기합니다(완료까지 1~2분).</>}
         </div>
         <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
@@ -1256,12 +1297,18 @@ export default function App() {
 
             {ovQuery.trim() === "" && !ovSelected && (
               <div style={{ fontSize: 12, color: C.dim, padding: "4px 2px", lineHeight: 1.6 }}>
-                티커를 입력하면 일치하는 종목 목록이 나오고, 그중 하나를 선택하면 해당 종목의 신호와 지수 환경별 전략 행동이 표시됩니다.
+                티커를 입력해 종목을 선택하면 <b style={{ color: C.sub }}>그 종목만 실시간 시세로 조회</b>해 C1~C7 신호와 실전 행동(매수/매도/손절·익절가)을 보여줍니다. NDX100에 없는 S&P 500 종목(예: JPM, GE, UNH)도 직접 조회할 수 있습니다.
               </div>
             )}
-            {ovQuery.trim() !== "" && ovFound.length === 0 && (
+            {ovQuery.trim() !== "" && ovFound.length === 0 && !ovSelected && (
               <Card style={{ textAlign: "center", color: C.dim, fontSize: 13 }}>
-                "{ovQuery.toUpperCase()}" 종목을 찾을 수 없습니다. 수록 종목 중에서 검색해 주세요.
+                <div style={{ marginBottom: 10 }}>"{ovQuery.toUpperCase()}"는 수록 목록에 없습니다. S&P 500 등 다른 미국 종목이면 아래로 직접 조회할 수 있습니다.</div>
+                <button onClick={() => { const tk = ovQuery.trim().toUpperCase(); setOvSelected(tk); fetchOne(tk); }} disabled={ovLoading} style={{
+                  display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 15px", borderRadius: 9, cursor: ovLoading ? "wait" : "pointer",
+                  background: C.brass, color: C.bg, border: "none", fontSize: 13, fontWeight: 700,
+                }}>
+                  <Search size={14} /> {ovQuery.toUpperCase()} 실시간 조회
+                </button>
               </Card>
             )}
 
@@ -1271,7 +1318,7 @@ export default function App() {
                 {ovFound.map((st) => {
                   const g = grade(st.score, (st.c ? st.c.length : 5));
                   return (
-                    <button key={st.t} onClick={() => setOvSelected(st.t)} style={{
+                    <button key={st.t} onClick={() => { setOvSelected(st.t); fetchOne(st.t); }} style={{
                       display: "flex", alignItems: "center", gap: 11, padding: "11px 14px", borderRadius: 10, cursor: "pointer", textAlign: "left",
                       background: C.panel, border: `1px solid ${C.line}`,
                     }}>
@@ -1291,10 +1338,19 @@ export default function App() {
             {/* 선택된 단일 종목 카드 */}
             {ovSelectedStock && (
               <>
-                <button onClick={() => setOvSelected(null)} style={{
-                  display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 10, padding: "6px 12px", borderRadius: 8, cursor: "pointer",
-                  background: "transparent", border: `1px solid ${C.line}`, color: C.sub, fontSize: 12,
-                }}>← 목록으로</button>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+                  <button onClick={() => { setOvSelected(null); setOvMsg(""); }} style={{
+                    display: "inline-flex", alignItems: "center", gap: 4, padding: "6px 12px", borderRadius: 8, cursor: "pointer",
+                    background: "transparent", border: `1px solid ${C.line}`, color: C.sub, fontSize: 12,
+                  }}>← 목록으로</button>
+                  <button onClick={() => fetchOne(ovSelected)} disabled={ovLoading} style={{
+                    display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 8, cursor: ovLoading ? "wait" : "pointer",
+                    background: ovLoading ? C.line : `${C.brass}22`, border: `1px solid ${C.brass}55`, color: C.brass, fontSize: 12, fontWeight: 700,
+                  }}>
+                    <RefreshCw size={12} style={ovLoading ? { animation: "spin 1s linear infinite" } : undefined} /> 최신 시세로 조회
+                  </button>
+                  {ovMsg && <span style={{ fontSize: 11, color: ovMsg.includes("실패") || ovMsg.includes("오류") ? C.down : C.dim }}>{ovMsg}</span>}
+                </div>
                 <StockSignalCard st={ovSelectedStock} idxStates={{ NDX: ndx, SPX: spx }} conf={conf} />
               </>
             )}
