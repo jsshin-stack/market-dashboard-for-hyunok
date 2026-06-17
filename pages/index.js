@@ -767,25 +767,52 @@ export default function Dashboard() {
   const [live, setLive] = useState({});        // { NVDA: {close, c, score, pull, ...}, ... }
   const [loading, setLoading] = useState(false);
   const [liveMsg, setLiveMsg] = useState("");
-  const conf = useMemo(() => calcConfirm(CONFIRM), []);
-  const ndx = calcIndex(IDX.NDX), spx = calcIndex(IDX.SPX);
+  // 지수·확인지표 실시간 덮어쓰기 상태 (없으면 기본 IDX/CONFIRM 사용)
+  const [liveIdx, setLiveIdx] = useState(null);     // { NDX:{...}, SPX:{...} }
+  const [liveConf, setLiveConf] = useState(null);   // { vix, vixPrev, hyg20 }
+  const idxData = useMemo(() => {
+    const base = { NDX: { ...IDX.NDX }, SPX: { ...IDX.SPX } };
+    if (liveIdx) {
+      ["NDX", "SPX"].forEach((k) => {
+        if (liveIdx[k] && !liveIdx[k].error) base[k] = { ...base[k], ...liveIdx[k] };
+      });
+    }
+    return base;
+  }, [liveIdx]);
+  const confData = useMemo(() => ({ ...CONFIRM, ...(liveConf || {}) }), [liveConf]);
+  const conf = useMemo(() => calcConfirm(confData), [confData]);
+  const ndx = calcIndex(idxData.NDX), spx = calcIndex(idxData.SPX);
 
-  // 실제 API에서 데이터 갱신 (서버 라우트 /api/quote 호출 → 키는 서버에 숨김)
+  // 실제 API에서 데이터 갱신 (서버 라우트 호출 → 키는 서버에 숨김)
   async function refreshLive(symbols) {
     setLoading(true);
-    setLiveMsg("최신 데이터를 불러오는 중…");
+    setLiveMsg("최신 데이터를 불러오는 중… (지수·지표·종목)");
+    let stockOk = 0, macroOk = false;
+    // 1) 지수·확인지표 갱신
     try {
-      const q = symbols.join(",");
-      const resp = await fetch(`/api/quote?symbols=${encodeURIComponent(q)}`);
-      const json = await resp.json();
-      if (!resp.ok || json.error) throw new Error(json.error || "요청 실패");
+      const mResp = await fetch("/api/macro");
+      const mJson = await mResp.json();
+      if (mResp.ok && mJson.ok) {
+        if (mJson.idx) setLiveIdx(mJson.idx);
+        if (mJson.confirm && Object.keys(mJson.confirm).length) setLiveConf(mJson.confirm);
+        macroOk = true;
+      }
+    } catch (e) { /* 지수 갱신 실패는 무시하고 종목만 진행 */ }
+
+    // 2) 종목 갱신 (8개씩 끊어서 순차 호출 → 무료 한도 보호)
+    try {
       const merged = { ...live };
-      let okCount = 0;
-      Object.entries(json.data).forEach(([sym, d]) => {
-        if (!d.error) { merged[sym] = d; okCount++; }
-      });
-      setLive(merged);
-      setLiveMsg(`${okCount}개 종목 갱신 완료 (${new Date().toLocaleTimeString("ko-KR")})`);
+      for (let i = 0; i < symbols.length; i += 8) {
+        const batch = symbols.slice(i, i + 8);
+        const resp = await fetch(`/api/quote?symbols=${encodeURIComponent(batch.join(","))}`);
+        const json = await resp.json();
+        if (resp.ok && json.data) {
+          Object.entries(json.data).forEach(([sym, d]) => { if (!d.error) { merged[sym] = d; stockOk++; } });
+        }
+        setLive({ ...merged });
+        setLiveMsg(`갱신 중… 종목 ${stockOk}개 완료`);
+      }
+      setLiveMsg(`갱신 완료 · 종목 ${stockOk}개${macroOk ? " · 지수/지표 포함" : " (지수/지표는 플랜 제한으로 생략됨)"} · ${new Date().toLocaleTimeString("ko-KR")}`);
     } catch (e) {
       setLiveMsg("갱신 실패: " + e.message + " — API 키/한도를 확인하세요.");
     } finally {
@@ -837,8 +864,8 @@ export default function Dashboard() {
     { id: "lookup", label: "백테스트", icon: FlaskConical },
   ];
 
-  // 백테스트 실행 핸들러
-  const runBT = () => {
+  // 백테스트 실행 핸들러 — 실제 API 시계열 우선, 실패 시 모의 데이터 폴백
+  const runBT = async () => {
     setBtError("");
     const tk = btTicker.trim().toUpperCase();
     const meta = allStocks.find((s) => s.t === tk);
@@ -846,15 +873,32 @@ export default function Dashboard() {
     if (!meta) { setBtError(`"${tk || "?"}" 종목을 찾을 수 없습니다. 수록 종목 중에서 입력하세요.`); setBtResult(null); return; }
     if (!(amt > 0)) { setBtError("투자 금액을 0보다 크게 입력하세요."); setBtResult(null); return; }
     if (diffDaysISO(btStart, btEnd) < 5) { setBtError("기간이 너무 짧습니다. 최소 1주 이상으로 설정하세요."); setBtResult(null); return; }
-    const series = fetchPriceSeries(tk, btStart, btEnd, meta);
-    if (series.length < 2) { setBtError("해당 기간에 거래일이 부족합니다."); setBtResult(null); return; }
+
+    setBtError("실제 시세를 불러오는 중…");
+    let series = null, source = "모의";
+    try {
+      const resp = await fetch(`/api/series?symbol=${encodeURIComponent(tk)}&start=${btStart}&end=${btEnd}`);
+      const json = await resp.json();
+      if (json.ok && json.values && json.values.length >= 2) {
+        series = json.values;       // [{date, close}]
+        source = "실제 API";
+      }
+    } catch (e) { /* 폴백으로 진행 */ }
+
+    // API 실패 시 기존 모의/앵커 시계열로 폴백
+    if (!series) {
+      series = fetchPriceSeries(tk, btStart, btEnd, meta);
+      source = REAL_ANCHORS[tk] ? "실제 앵커(보간)" : "모의";
+    }
+    setBtError("");
+    if (!series || series.length < 2) { setBtError("해당 기간에 거래일이 부족합니다."); setBtResult(null); return; }
+
     const hold = runBacktest(series, amt, meta, false);
     const strat = runBacktest(series, amt, meta, true);
-    // 합친 차트 데이터
     const chart = series.map((p, i) => ({
       date: p.date, "매수후보유": hold.equity[i].value, "전략": strat.equity[i].value,
     }));
-    setBtResult({ tk, meta, amt, series, hold, strat, chart, isReal: !!REAL_ANCHORS[tk] });
+    setBtResult({ tk, meta, amt, series, hold, strat, chart, isReal: source === "실제 API", source });
   };
 
   return (
@@ -870,8 +914,8 @@ export default function Dashboard() {
           </div>
           <button
             onClick={() => {
-              // 분석 대상 종목 중 NDX100 주요 종목을 갱신 (무료 한도 고려해 상위 8개)
-              const targets = ranked.slice(0, 8).map((s) => s.t);
+              // 분석 대상 종목 중 점수 상위 24개를 갱신 (8개씩 3배치, 무료 한도 내)
+              const targets = ranked.slice(0, 24).map((s) => s.t);
               refreshLive(targets.length ? targets : ["NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "AVGO", "COST"]);
             }}
             disabled={loading}
@@ -888,7 +932,7 @@ export default function Dashboard() {
         <div style={{ fontSize: 10.5, color: liveMsg.includes("실패") ? C.down : C.dim, marginBottom: 18, lineHeight: 1.5, padding: "8px 11px", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           {liveMsg
             ? <>↻ {liveMsg}</>
-            : <>↻ <b style={{ color: C.sub }}>실데이터 갱신</b> 버튼을 누르면 Twelve Data API에서 실제 시세를 가져와 상위 종목의 베이스 스캔 점수를 다시 계산합니다. (무료 한도를 아끼기 위해 한 번에 상위 8개 종목만 갱신)</>}
+            : <>↻ <b style={{ color: C.sub }}>실데이터 갱신</b> 버튼을 누르면 Twelve Data API에서 지수(NDX·SPX), 확인지표(VIX·HYG), 상위 24개 종목의 실제 시세를 가져와 점수를 다시 계산합니다. (무료 한도 보호를 위해 8개씩 순차 처리)</>}
         </div>
         <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
@@ -911,7 +955,7 @@ export default function Dashboard() {
           <>
             <SectionTitle icon={Gauge} sub="gap·slope·vol 점수 → 상태 → 액션">지수 신호 변화</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 12 }}>
-              <IndexCard k="NDX" d={IDX.NDX} /><IndexCard k="SPX" d={IDX.SPX} />
+              <IndexCard k="NDX" d={idxData.NDX} /><IndexCard k="SPX" d={idxData.SPX} />
             </div>
 
             {/* 지수 전체 전략 행동 — 지수 카드 바로 아래 */}
@@ -920,7 +964,7 @@ export default function Dashboard() {
                 <Minus size={15} color={C.blue} /><b style={{ fontSize: 14 }}>지수 전략 행동: 포지션 변경 불필요</b>
               </div>
               <div style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.8 }}>
-                NDX는 vol20 {IDX.NDX.vol20}%로 디리스크 임계(25%)를 초과해 BASE 유지(HOLD-{ndx.streak}). SPX는 LEVERAGE 3단계 고착(HOLD-{spx.streak}).
+                NDX는 vol20 {idxData.NDX.vol20}%로 디리스크 임계(25%)를 초과해 BASE 유지(HOLD-{ndx.streak}). SPX는 LEVERAGE 3단계 고착(HOLD-{spx.streak}).
                 두 지수 모두 추세는 강하나 변동성·매크로 이벤트(FOMC)를 앞두고 신규 레버리지 확대보다 <b style={{ color: C.text }}>기존 포지션 유지</b>가 합리적입니다.
               </div>
             </Card>
@@ -1205,7 +1249,7 @@ export default function Dashboard() {
                     <span style={{ fontSize: 12, color: C.sub }}>자산가치 추이 ({btResult.tk})</span>
                     <span style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 8px", borderRadius: 999,
                       color: btResult.isReal ? C.up : C.amber, background: `${btResult.isReal ? C.up : C.amber}1A` }}>
-                      {btResult.isReal ? "실제 주가 앵커 기반" : "모의 데이터"}
+                      {btResult.source || (btResult.isReal ? "실제 API" : "모의 데이터")}
                     </span>
                   </div>
                   <div style={{ width: "100%", height: 240 }}>
