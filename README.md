@@ -74,11 +74,5 @@
 - Twelve Data 무료는 하루 800회. 갱신 1회 = 지수/지표 4회 + 종목 24회 ≈ 28회 사용.
 - 지수(NDX 등)는 일부 무료 플랜에서 접근이 제한될 수 있습니다. 이 경우 종목만 갱신되고 지수는 기존 값을 유지합니다(앱은 정상 작동).
 
-## 섹터 탭용 Finnhub 키 (선택, 무료)
-섹터 탭의 'ETF 강약'은 Finnhub API를 씁니다(분당 60회로 빠름). 쓰려면 키를 하나 더 발급해 추가하세요. 안 넣어도 나머지 기능은 정상 작동합니다.
-1. https://finnhub.io/register 에서 무료 가입 → API 키 복사
-2. Vercel 프로젝트 → Settings → Environment Variables 에 추가:
-   - Name: `FINNHUB_API_KEY`
-   - Value: 발급받은 Finnhub 키
-3. 저장 후 재배포(Deployments → 최신 항목 ⋯ → Redeploy)
-- Finnhub 무료는 과거 시계열(candle)이 막혀 있어 개별 종목 C1~C7 전체 계산엔 못 씁니다. 그래서 섹터 탭은 ETF 등락·52주 고점 위치로 '섹터 강약'만 빠르게 보여주고, 개별 종목 정밀 분석은 종합 탭(Twelve Data)에서 합니다.
+## 섹터 탭
+섹터 탭은 각 섹터 대표 ETF(SOXX·XLK·IGV·XLV·XLY)를 개별 종목과 동일한 C1~C7 기준으로 평가합니다. ETF 5개만 조회하므로 Twelve Data 호출 5회로 끝나 한도 부담이 없습니다. 별도 키가 필요 없습니다.
