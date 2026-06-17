@@ -28,17 +28,17 @@ const CONFIRM = { rocNDX: 39.2, rocSPX: 25.2, vix: 16.20, vixPrev: 19.44, hyg20:
 const SECTORS = [
   { sector: "반도체", color: "#5B9BF0", stocks: [
     // 실제 데이터(2026-06-15) 기반 계산. C1 추세(>MA200)·C2 풀백(-5~-18%)·C3 베이스·C4 MA20수렴·C5 돌파
-    { t: "NVDA", pull: -10.2, c: [0,1,1,0,0], note: "$212.45 / 52wH $236.54 → -10.2% 풀백. MA200($215.15) 약간 하회로 추세 신호 미달." },
+    { t: "NVDA", pull: -10.2, c: [0,1,1,0,0,0,1], earnings: ["2026-08-27"], note: "$212.45 / 52wH $236.54 → -10.2% 풀백. MA200($215.15) 약간 하회로 추세 신호 미달." },
     { t: "AVGO", pull: -20.2, c: [1,0,0,0,0], note: "$394.82 / 52wH $495 → -20.2%. 풀백 폭이 베이스 기준(-18%) 초과로 과도." },
     { t: "AMD",  pull:  0.0, c: [1,0,0,0,1], note: "52주 신고가 경신(MEXT 인수+Ryzen AI). 돌파·추세 충족, 풀백 없음." },
     { t: "MU",   pull:  0.0, c: [1,0,0,0,1], note: "신 52주 고점, +11% 급등. 추세·돌파 강함, 베이스 미형성." },
     { t: "ASML", pull: -3.0, c: [1,0,0,1,1], note: "52주 범위 상단·MA200 상회. 신고가 근접, 얕은 풀백으로 MA20 수렴." },
     { t: "LRCX", pull: -2.0, c: [1,0,0,1,1], note: "+21% 급등(Q3 호실적). 고점 근접, 추세·돌파 충족." },
     { t: "KLAC", pull: -3.0, c: [1,0,0,1,1], note: "장비주 강세·ETF 유입. 신고가 근접 모멘텀." },
-    { t: "AMAT", pull: -4.0, c: [1,0,1,1,1], note: "장비 수주 회복. 고점 근접, 얕은 조정으로 베이스·돌파 동시." },
-    { t: "QCOM", pull: -8.0, c: [1,1,1,1,0], note: "건전한 -8% 풀백, MA200 상회. 베이스·MA20 수렴 양호." },
-    { t: "TXN",  pull: -6.0, c: [1,1,1,1,0], note: "안정적 -6% 풀백. 추세 유지, 베이스 형성 구간." },
-    { t: "ARM",  pull:  0.0, c: [1,0,0,0,1], note: "+5% 강세, 고점권. 모멘텀 강하나 풀백 없음." },
+    { t: "AMAT", pull: -4.0, c: [1,0,1,1,1,1,1], note: "장비 수주 회복. 돌파+거래량 동반, 지수 환경 우호적 → 7항목 충족." },
+    { t: "QCOM", pull: -8.0, c: [1,1,1,1,0,0,1], note: "건전한 -8% 풀백, MA200 상회. 베이스·MA20 수렴 양호, 지수 강세." },
+    { t: "TXN",  pull: -6.0, c: [1,1,1,1,0,0,1], note: "안정적 -6% 풀백. 추세 유지, 베이스 형성 구간, 지수 우위." },
+    { t: "ARM",  pull:  0.0, c: [1,0,0,0,1,1,1], note: "+5% 강세, 고점권. 돌파+거래량 폭발, 상대강도 우위." },
     { t: "MRVL", pull: -7.0, c: [1,1,1,1,0], note: "AI 커스텀 실리콘 수요. 건전한 풀백 구간." },
     { t: "INTC", pull: -5.3, c: [1,1,1,1,0], note: "파운드리 반등, +2% 상승. 안정적 풀백." },
     { t: "NXPI", pull: -9.0, c: [1,1,1,0,0], note: "차량용 반도체. 적정 풀백, 베이스 초기." },
@@ -265,18 +265,78 @@ const NDX100 = [
 const SECTOR_COLOR = { "반도체": "#5B9BF0", "빅테크": "#9B8CF0", "소프트웨어": "#E0A93C", "금융&헬스케어": "#3DD68C", "소비재": "#E0A93C" };
 const NDX_TICKERS = new Set(NDX100.map((s) => s.t));
 
-const EVENTS = [
-  { date: "6/16 (화)", ev: "FOMC Day 1", exp: "—", impact: "높음", bias: "neutral",
-    why: "회의 시작일, 직접 결정 없음. 관망 우위." },
-  { date: "6/17 (수)", ev: "FOMC 금리 결정 + 기자회견", exp: "동결 (3.50~3.75%)", impact: "매우 높음", bias: "neutral",
-    why: "동결 거의 확실(시장 반영 완료). 신임 Warsh 의장 첫 회의 — 매파 톤이면 마이너스." },
-  { date: "6/17 (수)", ev: "FOMC 점도표 (dot plot)", exp: "연내 인하 축소/동결", impact: "시장 방향키", bias: "minus",
-    why: "Warsh 의장 매파 성향. 인하 기대 후퇴 시 성장주 압박 → 마이너스 가능성." },
-  { date: "6/18 (목)", ev: "신규 실업수당 청구건수", exp: "안정적", impact: "중간", bias: "neutral",
-    why: "노동시장 견조 확인이면 중립. 급증 시에만 변수." },
-  { date: "6/19 (금)", ev: "Juneteenth (미국 공휴일)", exp: "휴장", impact: "—", bias: "neutral",
-    why: "증시 휴장. 거래 없음." },
-];
+/* === 매크로 이벤트 자동 생성 (오늘 기준 향후 30일, 오름차순) ===
+   정기 반복 이벤트를 날짜 규칙으로 생성한다. 일회성 뉴스는 포함 안 됨.
+   bias 기본값은 neutral이며, 배포판에서 뉴스 기반으로 갱신된다. */
+const FOMC_2026 = ["2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17", "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09"];
+const US_HOLIDAYS_2026 = {
+  "2026-01-01": "신정", "2026-01-19": "마틴루터킹데이", "2026-02-16": "프레지던츠데이",
+  "2026-04-03": "성금요일(휴장)", "2026-05-25": "메모리얼데이", "2026-06-19": "준틴스데이",
+  "2026-07-03": "독립기념일(대체휴장)", "2026-09-07": "노동절", "2026-11-26": "추수감사절",
+  "2026-12-25": "크리스마스",
+};
+function nthWeekdayOfMonth(year, month, weekday, n) {
+  // month: 0-11, weekday: 0(일)-6(토), n: 1=첫째
+  const first = new Date(year, month, 1);
+  let day = 1 + ((weekday - first.getDay() + 7) % 7) + (n - 1) * 7;
+  return new Date(year, month, day);
+}
+function iso(d) { return d.toISOString().slice(0, 10); }
+function generateEvents(fromISO, days = 30) {
+  const start = new Date(fromISO + "T00:00:00");
+  const end = new Date(start); end.setDate(end.getDate() + days);
+  const ev = [];
+  const within = (d) => d >= start && d <= end;
+
+  // 월 단위로 훑으며 정기 지표 생성 (이번 달 + 다음 달)
+  for (let m = 0; m < 2; m++) {
+    const base = new Date(start.getFullYear(), start.getMonth() + m, 1);
+    const Y = base.getFullYear(), M = base.getMonth();
+    // 고용보고서: 첫째 금요일
+    const jobs = nthWeekdayOfMonth(Y, M, 5, 1);
+    if (within(jobs)) ev.push({ d: jobs, ev: "고용보고서 (비농업 고용)", impact: "매우 높음", kw: "US jobs report nonfarm payrolls" });
+    // CPI: 보통 10~15일 사이 (근사: 둘째 수요일)
+    const cpi = nthWeekdayOfMonth(Y, M, 3, 2);
+    if (within(cpi)) ev.push({ d: cpi, ev: "소비자물가지수 (CPI)", impact: "매우 높음", kw: "US CPI inflation report" });
+    // PPI: CPI 다음날 근사 (둘째 목요일)
+    const ppi = nthWeekdayOfMonth(Y, M, 4, 2);
+    if (within(ppi)) ev.push({ d: ppi, ev: "생산자물가지수 (PPI)", impact: "높음", kw: "US PPI producer prices" });
+    // 소매판매: 셋째 화요일 근사
+    const retail = nthWeekdayOfMonth(Y, M, 2, 3);
+    if (within(retail)) ev.push({ d: retail, ev: "소매판매", impact: "중간", kw: "US retail sales" });
+    // 옵션 만기일(트리플위칭 포함): 셋째 금요일
+    const opex = nthWeekdayOfMonth(Y, M, 5, 3);
+    if (within(opex)) ev.push({ d: opex, ev: "옵션 만기일 (OpEx)", impact: "중간", kw: "options expiration triple witching" });
+    // PCE: 말일 근사 (마지막 평일)
+    const lastDay = new Date(Y, M + 1, 0);
+    while (lastDay.getDay() === 0 || lastDay.getDay() === 6) lastDay.setDate(lastDay.getDate() - 1);
+    if (within(lastDay)) ev.push({ d: new Date(lastDay), ev: "PCE 물가지수 (Fed 선호지표)", impact: "높음", kw: "US PCE inflation" });
+  }
+  // FOMC (고정 일정)
+  FOMC_2026.forEach((f) => {
+    const d = new Date(f + "T00:00:00");
+    if (within(d)) ev.push({ d, ev: "FOMC 금리결정 + 기자회견", impact: "매우 높음", kw: "FOMC Fed interest rate decision" });
+  });
+  // 주간 실업수당 청구 (매주 목요일)
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    if (d.getDay() === 4) ev.push({ d: new Date(d), ev: "신규 실업수당 청구건수", impact: "낮음", kw: "US jobless claims" });
+  }
+  // 미국 증시 휴장일
+  Object.entries(US_HOLIDAYS_2026).forEach(([dt, name]) => {
+    const d = new Date(dt + "T00:00:00");
+    if (within(d)) ev.push({ d, ev: `${name} (휴장)`, impact: "—", kw: "" });
+  });
+
+  // 정렬 + 표기 가공
+  const WD = ["일", "월", "화", "수", "목", "금", "토"];
+  return ev.sort((a, b) => a.d - b.d).map((e) => ({
+    date: `${e.d.getMonth() + 1}/${e.d.getDate()} (${WD[e.d.getDay()]})`,
+    dateISO: iso(e.d),
+    ev: e.ev, impact: e.impact, kw: e.kw,
+    exp: "—", bias: "neutral",
+    why: "평가 대기 — '실데이터 갱신' 시 최신 뉴스 기반으로 ±판정됩니다.",
+  }));
+}
 
 /* ── 판정 엔진 (첨부 리포트 공식 구현) ───────────────────────── */
 function calcIndex(d) {
@@ -309,11 +369,14 @@ const C_LEGEND = [
   "베이스: 추세 유지하며 가격 다지는 중",
   "MA20 수렴: 20일선 근처(±4%)로 모임",
   "돌파: 최근 30일 고점 돌파/근접",
+  "거래량: 돌파일 거래량 20일평균 1.5배↑",
+  "지수환경: 지수 50일선 위 + 상대강도 우위",
 ];
-function grade(s) {
-  if (s >= 4) return { label: "1순위 매수 후보", color: C.up, dot: "🟢" };
-  if (s === 3) return { label: "관찰 / 부분 매수", color: C.brass, dot: "🟡" };
-  if (s === 2) return { label: "관망", color: C.amber, dot: "🟠" };
+function grade(s, max = 5) {
+  const r = s / max;   // 충족 비율
+  if (r >= 0.8) return { label: "1순위 매수 후보", color: C.up, dot: "🟢" };
+  if (r >= 0.55) return { label: "관찰 / 부분 매수", color: C.brass, dot: "🟡" };
+  if (r >= 0.35) return { label: "관망", color: C.amber, dot: "🟠" };
   return { label: "회피 / 보류", color: C.down, dot: "🔴" };
 }
 
@@ -387,6 +450,46 @@ function stockStrategy(score, idxState, conf, idxKey) {
    NDX 편입 종목은 NDX+SPX 양쪽(대부분 SPX에도 포함), 그 외는 SPX만. */
 function stockIndices(ticker) {
   return NDX_TICKERS.has(ticker) ? ["NDX", "SPX"] : ["SPX"];
+}
+
+/* === 종목 실전 행동 판정 (백테스트와 동일 규칙) ===
+   C1~C7 점수 + 지수 국면 + 확인지표로 매수/보유/관망/회피를 정하고
+   매수 시 손절가(-7%)·익절가(+20%)·추적손절(-10%)을 함께 제시한다.
+   반환: { action, color, reason, stop, target, trail, size } */
+function tradeAction(st, idxStates, conf) {
+  const score = st.score, maxC = st.c ? st.c.length : 5;
+  const ratio = score / maxC;
+  const px = st.close != null ? st.close : (st.px != null ? st.px : null);
+  // 지수 국면: 보유 지수 중 하나라도 강세(LEVERAGE/BASE)면 우호
+  const regimes = stockIndices(st.t).map((ix) => idxStates?.[ix]?.state).filter(Boolean);
+  const regimeOk = regimes.some((r) => r === "LEVERAGE" || r === "BASE");
+  const confOk = conf ? conf.allPass : true;
+
+  // 손절/익절/추적 가격
+  const lvl = px ? {
+    stop: +(px * 0.93).toFixed(2),     // -7%
+    target: +(px * 1.20).toFixed(2),   // +20%
+    trail: +(px * 0.90).toFixed(2),    // -10% 추적(고점 기준이나 참고용 현재가 기준 표기)
+  } : null;
+
+  let action, color, reason, size = null;
+  if (ratio >= 0.7 && regimeOk && confOk) {
+    action = "매수"; color = C.up; size = ratio >= 0.85 ? "100%" : "70%";
+    reason = `강신호(${score}/${maxC}) + 지수 우호 + 확인지표 통과. 진입 적합.`;
+  } else if (ratio >= 0.7 && (!regimeOk || !confOk)) {
+    action = "관망"; color = C.amber;
+    reason = `종목 신호는 강하나 ${!regimeOk ? "지수 약세" : "확인지표 미달"}. 환경 개선 시 진입.`;
+  } else if (ratio >= 0.45) {
+    action = "보유/관찰"; color = C.brass;
+    reason = `중간 신호(${score}/${maxC}). 신규 진입은 보류, 보유 중이면 손절 지키며 관찰.`;
+  } else if (ratio >= 0.3) {
+    action = "관망"; color = C.amber;
+    reason = `약한 신호(${score}/${maxC}). 베이스 형성·돌파 대기.`;
+  } else {
+    action = "회피/매도"; color = C.down;
+    reason = `신호 미달(${score}/${maxC}). 신규 진입 자제, 보유 중이면 비중 축소.`;
+  }
+  return { action, color, reason, size, lvl, regimes, regimeOk, confOk };
 }
 function calcConfirm(cf) {
   const all = [
@@ -483,29 +586,40 @@ function tradingDays(startISO, endISO) {
 function fetchPriceSeries(ticker, startISO, endISO, meta) {
   const days = tradingDays(startISO, endISO);
   if (days.length === 0) return [];
+  const rnd2 = rng(seedFromTicker(ticker) + 7);
+  const mkVol = (prevC, c) => {
+    // 가격 상승일에 거래량이 늘도록(돌파일 급증 흉내), 기본 100만 ± 변동
+    const base = 1000000;
+    const move = prevC ? Math.abs(c / prevC - 1) : 0;
+    const spike = move > 0.03 ? 1.6 + rnd2() : 1;     // 큰 상승/하락일 거래량 급증
+    return Math.round(base * (0.7 + rnd2() * 0.6) * spike);
+  };
   const anchors = REAL_ANCHORS[ticker];
   if (anchors) {
-    // 실제 앵커 기반: 주 변동성을 약간 가미해 자연스럽게 (앵커는 정확히 통과)
     const rand = rng(seedFromTicker(ticker));
     const anchorDates = new Set(anchors.map((a) => a.date));
+    let prev = null;
     return days.map((d) => {
       const base = interpAnchor(anchors, d);
-      // 앵커 당일은 실값 그대로, 사이 구간은 소폭 노이즈(±0.8%)
       const noise = anchorDates.has(d) ? 0 : (rand() - 0.5) * 0.016;
-      return { date: d, close: +(base * (1 + noise)).toFixed(2), real: true };
+      const close = +(base * (1 + noise)).toFixed(2);
+      const volume = mkVol(prev, close); prev = close;
+      return { date: d, close, volume, real: true };
     });
   }
-  // 폴백: 모의 시계열
   const rand = rng(seedFromTicker(ticker));
   const score = meta?.score ?? 2;
   const drift = (score - 2) * 0.0006 + 0.0002;
   const vol = 0.012 + Math.abs(meta?.pull ?? 8) / 1000;
   let price = 100 + (seedFromTicker(ticker) % 300);
   const series = [];
+  let prev = null;
   for (let i = 0; i < days.length; i++) {
     const shock = (rand() + rand() + rand() - 1.5) * 2 * vol;
     price = Math.max(1, price * (1 + drift + shock));
-    series.push({ date: days[i], close: +price.toFixed(2), real: false });
+    const close = +price.toFixed(2);
+    const volume = mkVol(prev, close); prev = close;
+    series.push({ date: days[i], close, volume, real: false });
   }
   return series;
 }
@@ -518,12 +632,18 @@ function sma(series, idx, win) {
   return s / win;
 }
 
-/* === 특정 시점(idx)의 베이스 스캔 C1~C5 점수 계산 ===
-   대시보드 종목 카드와 동일한 규칙을 그 시점까지의 시계열로 재현.
-   C1 추세: 종가>MA200 / C2 풀백: 52주 고점 대비 -5~-18%
-   C3 베이스: C1 + 적정 조정(-3~-15%) / C4 MA20 수렴: ±4%
-   C5 돌파: 최근 30일 고점의 98% 이상 */
-function scoreAt(series, idx) {
+/* === 특정 시점(idx)의 베이스 스캔 점수 계산 (C1~C7) ===
+   대시보드의 종목 카드와 동일한 규칙을 그 시점까지의 시계열로 재현한다.
+   C1 추세: 종가 > MA200
+   C2 풀백: 52주(최대 252일) 고점 대비 -5~-18%
+   C3 베이스: 추세(C1) + 적정 조정(-3~-15%)
+   C4 MA20 수렴: 종가가 MA20 ±4% 이내
+   C5 돌파: 최근 30일 고점의 98% 이상(돌파/근접)
+   C6 거래량: 돌파일 거래량이 20일 평균의 1.5배 이상 (volume 데이터 필요)
+   C7 지수환경: 지수가 50일선 위 + 종목 상대강도(20일) 우위 (idxSeries 필요)
+   데이터(거래량/지수)가 없으면 해당 항목은 0으로 처리한다.
+   반환: { c: [c1..c7], score, detail } */
+function scoreAt(series, idx, idxSeries) {
   const close = series[idx].close;
   const lo = (n) => Math.max(0, idx - n + 1);
   const win = (n) => series.slice(lo(n), idx + 1);
@@ -535,43 +655,136 @@ function scoreAt(series, idx) {
   const high30 = Math.max(...win(30).map((d) => d.close));
   const pull = high52 ? ((close - high52) / high52) * 100 : 0;
   const fromMA20 = ma20 ? ((close - ma20) / ma20) * 100 : 0;
+
   const c1 = ma200 != null && close > ma200 ? 1 : 0;
   const c2 = pull <= -5 && pull >= -18 ? 1 : 0;
   const c3 = c1 && pull <= -3 && pull >= -15 ? 1 : 0;
   const c4 = Math.abs(fromMA20) <= 4 ? 1 : 0;
   const c5 = close >= high30 * 0.98 ? 1 : 0;
-  return c1 + c2 + c3 + c4 + c5;
+
+  // C6 거래량 돌파: 당일 거래량 ≥ 20일 평균 × 1.5
+  let c6 = 0;
+  const vols = win(21).map((d) => d.volume).filter((v) => v != null && !isNaN(v));
+  if (vols.length >= 6) {
+    const today = series[idx].volume;
+    const past = vols.slice(0, -1);                       // 당일 제외 과거
+    const avgVol = past.reduce((a, b) => a + b, 0) / past.length;
+    if (today != null && avgVol > 0 && today >= avgVol * 1.5) c6 = 1;
+  }
+
+  // C7 지수 환경: 지수 50일선 위 AND 종목 20일 수익률 > 지수 20일 수익률
+  let c7 = 0;
+  if (idxSeries && idxSeries.length) {
+    // 같은 인덱스 위치를 날짜로 맞추기 어려우니, 동일 길이 가정 하에 idx 사용 (백테스트는 동일 기간)
+    const j = Math.min(idx, idxSeries.length - 1);
+    const ic = idxSeries[j].close;
+    const iwin = idxSeries.slice(Math.max(0, j - 49), j + 1).map((d) => d.close);
+    const ima50 = iwin.length ? iwin.reduce((a, b) => a + b, 0) / iwin.length : null;
+    const idxAbove50 = ima50 != null && ic > ima50;
+    // 상대강도: 최근 20일 수익률 비교
+    const stockRet = closes.length > 20 ? (close / series[lo(20)].close - 1) : 0;
+    const idxAgo = idxSeries[Math.max(0, j - 19)].close;
+    const idxRet = idxAgo ? (ic / idxAgo - 1) : 0;
+    if (idxAbove50 && stockRet > idxRet) c7 = 1;
+  }
+
+  const c = [c1, c2, c3, c4, c5, c6, c7];
+  return { c, score: c.reduce((a, b) => a + b, 0) };
 }
 
-/* === 백테스트 실행 ===
+/* === 백테스트 실행 (실전 요소 종합) ===
    strategyEnabled=false → 시작일 전액 매수 후 보유(Buy&Hold)
-   strategyEnabled=true  → C1~C5 점수로: 시작일 매수, ≤2점 매도, ≥4점 재매수, 3점 유지
-*/
-function runBacktest(series, capital, meta, strategyEnabled) {
+   strategyEnabled=true  → 다음 규칙을 모두 적용:
+   [진입] C1~C7 점수 ≥ 5  AND  지수 50일선 위(국면 필터)  AND  손익비 ≥ 1.5  AND  실적 임박 아님
+   [비중] 포지션 사이징: 점수·변동성 기반으로 매수 비중(50~100%) 차등
+   [출구] ① 손절 -7%  ② 추적손절: 보유 중 고점 대비 -10%  ③ 익절: +20% 목표 도달  ④ 신호 약화(점수 ≤ 2)
+   opts: { idxSeries, earnings }  (earnings: 실적 예정일 ISO 배열) */
+function annualVol(series, idx, win = 20) {
+  const lo = Math.max(1, idx - win + 1);
+  const rets = [];
+  for (let k = lo; k <= idx; k++) rets.push(series[k].close / series[k - 1].close - 1);
+  if (rets.length < 2) return 0.3;
+  const m = rets.reduce((a, b) => a + b, 0) / rets.length;
+  const v = rets.reduce((a, b) => a + (b - m) ** 2, 0) / rets.length;
+  return Math.sqrt(v) * Math.sqrt(252);   // 연율화 변동성
+}
+function nearEarnings(dateISO, earnings, daysAhead = 5) {
+  if (!earnings || !earnings.length) return false;
+  const t = new Date(dateISO).getTime();
+  return earnings.some((e) => {
+    const d = new Date(e).getTime() - t;
+    return d >= 0 && d <= daysAhead * 86400000;
+  });
+}
+function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
   if (series.length < 2) return null;
+  const idxSeries = opts.idxSeries;
+  const earnings = opts.earnings;
   const start = series[0].close;
   let cash = capital, shares = 0, inPos = false;
-  let trades = 0;
+  let trades = 0, stops = 0, trails = 0, takes = 0, skipsRR = 0, skipsEarn = 0;
+  let entryPx = 0, peakSinceEntry = 0;
   const equity = [];
   let peak = capital, maxDD = 0;
+  const STOP = -7, TRAIL = -10, TAKE = 20, MIN_RR = 1.5;
+
+  // 포지션 사이징: 점수 비율 높고 변동성 낮을수록 큰 비중(0.5~1.0)
+  const sizeFor = (score, maxScore, vol) => {
+    const sBoost = Math.min(1, score / maxScore);              // 0~1
+    const vAdj = Math.max(0.5, Math.min(1, 0.25 / Math.max(0.1, vol))); // 변동성 클수록 축소
+    return Math.max(0.5, Math.min(1, 0.6 * sBoost + 0.4 * vAdj));
+  };
+  // 손익비: 저항(최근 252일 고점)까지 상승 여력 vs 손절 -7%
+  const rrFor = (idx) => {
+    const lo = Math.max(0, idx - 251);
+    const high = Math.max(...series.slice(lo, idx + 1).map((d) => d.close));
+    const px = series[idx].close;
+    const upside = ((high - px) / px) * 100;     // 저항까지 %
+    return upside / 7;                            // 위험(-7%) 대비
+  };
+  const idxAbove50 = (idx) => {
+    if (!idxSeries || !idxSeries.length) return true;   // 지수 없으면 통과
+    const j = Math.min(idx, idxSeries.length - 1);
+    const w = idxSeries.slice(Math.max(0, j - 49), j + 1).map((d) => d.close);
+    const ma = w.reduce((a, b) => a + b, 0) / w.length;
+    return idxSeries[j].close > ma;
+  };
 
   for (let i = 0; i < series.length; i++) {
     const px = series[i].close;
     if (!strategyEnabled) {
       if (i === 0) { shares = capital / px; cash = 0; inPos = true; }
     } else {
-      // 전략 매매: 시작일에 전액 매수(보유)로 출발.
-      // 이후 매 시점 C1~C5 점수: ≤2점 매도, ≥4점 재매수, 3점은 현 상태 유지.
+      const { score: sc, c } = scoreAt(series, i, idxSeries);
+      const maxScore = c.length;
       if (i === 0) {
-        shares = capital / px; cash = 0; inPos = true;   // 초기 진입(매매 횟수 미포함)
+        // 시작일: 포지션 사이징 적용해 진입
+        const size = sizeFor(sc, maxScore, annualVol(series, i));
+        const invest = capital * size;
+        shares = invest / px; cash = capital - invest; inPos = true;
+        entryPx = px; peakSinceEntry = px;
+      } else if (inPos) {
+        peakSinceEntry = Math.max(peakSinceEntry, px);
+        const lossPct = ((px - entryPx) / entryPx) * 100;
+        const trailPct = ((px - peakSinceEntry) / peakSinceEntry) * 100;
+        const gainPct = lossPct;
+        if (lossPct <= STOP) { cash += shares * px; shares = 0; inPos = false; trades++; stops++; }
+        else if (trailPct <= TRAIL) { cash += shares * px; shares = 0; inPos = false; trades++; trails++; }
+        else if (gainPct >= TAKE) { cash += shares * px; shares = 0; inPos = false; trades++; takes++; }
+        else if (sc <= 2) { cash += shares * px; shares = 0; inPos = false; trades++; }
       } else {
-        const sc = scoreAt(series, i);
-        if (inPos && sc <= 2) {
-          cash = shares * px; shares = 0; inPos = false; trades++;   // 매도(신호 약화)
-        } else if (!inPos && sc >= 4) {
-          shares = cash / px; cash = 0; inPos = true; trades++;      // 재매수(신호 강함)
+        // 재진입 조건: 강신호 + 국면 + 손익비 + 실적회피
+        if (sc >= 5) {
+          if (!idxAbove50(i)) { /* 약세장 필터: 진입 보류 */ }
+          else if (nearEarnings(series[i].date, earnings)) { skipsEarn++; }
+          else if (rrFor(i) < MIN_RR) { skipsRR++; }
+          else {
+            const size = sizeFor(sc, maxScore, annualVol(series, i));
+            const invest = cash * size;
+            shares = invest / px; cash -= invest; inPos = true;
+            entryPx = px; peakSinceEntry = px; trades++;
+          }
         }
-        // 3점이거나 그 외에는 현 상태 유지
       }
     }
     const val = cash + shares * px;
@@ -584,7 +797,7 @@ function runBacktest(series, capital, meta, strategyEnabled) {
     startPrice: start, endPrice: series[series.length - 1].close,
     finalValue: endVal, profit: endVal - capital,
     retPct: ((endVal - capital) / capital) * 100,
-    maxDD: maxDD * 100, trades, equity,
+    maxDD: maxDD * 100, trades, stops, trails, takes, skipsRR, skipsEarn, equity,
   };
 }
 
@@ -710,8 +923,10 @@ function StockSignalCard({ st, idxStates, conf }) {
       </Card>
     );
   }
-  const g = grade(st.score);
-  const labels = ["C1 추세", "C2 풀백", "C3 베이스", "C4 MA20수렴", "C5 돌파"];
+  const g = grade(st.score, st.c.length);
+  const labels = ["C1 추세", "C2 풀백", "C3 베이스", "C4 MA20수렴", "C5 돌파", "C6 거래량", "C7 지수환경"];
+  const nC = st.c.length;                    // 5 또는 7
+  const maxScore = nC;
   const indices = stockIndices(st.t);
   return (
     <Card style={{ borderColor: `${g.color}44` }}>
@@ -722,7 +937,7 @@ function StockSignalCard({ st, idxStates, conf }) {
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 26, fontWeight: 800, color: g.color, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
-            {st.score}<span style={{ fontSize: 13, color: C.dim }}>/5</span>
+            {st.score}<span style={{ fontSize: 13, color: C.dim }}>/{maxScore}</span>
           </div>
           <div style={{ fontSize: 11.5, color: g.color, fontWeight: 700, marginTop: 3 }}>{g.dot} {g.label}</div>
         </div>
@@ -737,17 +952,17 @@ function StockSignalCard({ st, idxStates, conf }) {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 6 }}>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${nC},1fr)`, gap: 5 }}>
         {st.c.map((v, j) => (
-          <div key={j} style={{ textAlign: "center", padding: "8px 2px", borderRadius: 8, background: v ? `${g.color}1A` : C.panel2, border: `1px solid ${v ? `${g.color}44` : C.line}` }}>
-            <div style={{ fontSize: 14, color: v ? g.color : C.dim }}>{v ? "✓" : "—"}</div>
-            <div style={{ fontSize: 9, color: C.dim, marginTop: 2 }}>{labels[j]}</div>
+          <div key={j} style={{ textAlign: "center", padding: "8px 1px", borderRadius: 8, background: v ? `${g.color}1A` : C.panel2, border: `1px solid ${v ? `${g.color}44` : C.line}` }}>
+            <div style={{ fontSize: 13, color: v ? g.color : C.dim }}>{v ? "✓" : "—"}</div>
+            <div style={{ fontSize: 8, color: C.dim, marginTop: 2 }}>{labels[j].split(" ")[0]}</div>
           </div>
         ))}
       </div>
-      {/* C1~C5 한 줄 설명 */}
+      {/* C1~C7 한 줄 설명 */}
       <div style={{ marginTop: 8, fontSize: 9.5, color: C.dim, lineHeight: 1.7 }}>
-        {C_LEGEND.map((d, j) => (
+        {C_LEGEND.slice(0, nC).map((d, j) => (
           <div key={j} style={{ display: "flex", gap: 5 }}>
             <span style={{ color: st.c[j] ? g.color : C.dim, fontWeight: 700, minWidth: 18 }}>{st.c[j] ? "✓" : "—"} C{j + 1}</span>
             <span>{d}</span>
@@ -756,50 +971,47 @@ function StockSignalCard({ st, idxStates, conf }) {
       </div>
       <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.7, marginTop: 12, padding: "10px 12px", background: C.panel2, borderRadius: 9 }}>{st.note}</div>
 
-      {/* 지수별 전략 행동 */}
-      {idxStates && (
-        <div style={{ marginTop: 12 }}>
-          <div style={{ fontSize: 10.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 7, display: "flex", alignItems: "center", gap: 5 }}>
-            <Target size={12} color={C.brass} /> 지수 환경별 전략 행동
-            <span style={{ marginLeft: "auto", color: conf && conf.allPass ? C.up : C.down, fontSize: 9.5, fontWeight: 700 }}>
-              {conf ? (conf.allPass ? "확인지표 ✓ 전부 통과" : "확인지표 ⚠ 일부 미달") : ""}
-            </span>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: indices.length > 1 ? "1fr 1fr" : "1fr", gap: 7 }}>
-            {indices.map((ix) => {
-              const regime = idxStates[ix].state;
-              const sg = stockStrategy(st.score, regime, conf, ix);
-              return (
-                <div key={ix} style={{ padding: "10px 11px", borderRadius: 9, background: `${sg.color}10`, border: `1px solid ${sg.color}33` }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
-                    <span style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>{ix} <span style={{ color: STATE_COLOR[regime], fontSize: 10 }}>· {regime}</span></span>
-                    <span style={{ fontSize: 12.5, fontWeight: 800, color: sg.color, display: "inline-flex", alignItems: "center", gap: 3 }}>
-                      {sg.downgraded && <ArrowDownRight size={11} />}{sg.action}
-                    </span>
-                  </div>
-                  {sg.fails.length > 0 && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginBottom: 4 }}>
-                      {sg.fails.map((f) => (
-                        <span key={f} style={{ fontSize: 8.5, color: C.down, background: `${C.down}1A`, padding: "1px 5px", borderRadius: 4 }}>{f}</span>
-                      ))}
-                    </div>
-                  )}
-                  <div style={{ fontSize: 10.5, color: C.sub, lineHeight: 1.55 }}>{sg.note}</div>
+      {/* 종목 실전 행동 (매수/보유/매도/손절) */}
+      {idxStates && (() => {
+        const ta = tradeAction(st, idxStates, conf);
+        return (
+          <div style={{ marginTop: 12, padding: "12px 13px", borderRadius: 10, background: `${ta.color}12`, border: `1px solid ${ta.color}44` }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
+              <span style={{ fontSize: 10.5, color: C.dim, letterSpacing: "0.06em", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <Target size={12} color={ta.color} /> 실전 행동
+              </span>
+              <span style={{ fontSize: 15, fontWeight: 800, color: ta.color }}>{ta.action}{ta.size ? ` · ${ta.size}` : ""}</span>
+            </div>
+            <div style={{ fontSize: 11, color: C.sub, lineHeight: 1.6, marginBottom: ta.lvl ? 9 : 0 }}>{ta.reason}</div>
+            {ta.lvl && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+                <div style={{ textAlign: "center", padding: "7px 2px", borderRadius: 7, background: C.panel2 }}>
+                  <div style={{ fontSize: 8.5, color: C.dim }}>손절 -7%</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.down, fontVariantNumeric: "tabular-nums" }}>${ta.lvl.stop}</div>
                 </div>
-              );
-            })}
+                <div style={{ textAlign: "center", padding: "7px 2px", borderRadius: 7, background: C.panel2 }}>
+                  <div style={{ fontSize: 8.5, color: C.dim }}>추적손절 -10%</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.amber, fontVariantNumeric: "tabular-nums" }}>${ta.lvl.trail}</div>
+                </div>
+                <div style={{ textAlign: "center", padding: "7px 2px", borderRadius: 7, background: C.panel2 }}>
+                  <div style={{ fontSize: 8.5, color: C.dim }}>익절 +20%</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.up, fontVariantNumeric: "tabular-nums" }}>${ta.lvl.target}</div>
+                </div>
+              </div>
+            )}
+            <div style={{ fontSize: 9, color: C.dim, marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span>지수 국면: {ta.regimes.join("/") || "—"} {ta.regimeOk ? "✓" : "⚠"}</span>
+              <span>확인지표: {ta.confOk ? "통과 ✓" : "일부 미달 ⚠"}</span>
+            </div>
           </div>
-          {indices.length === 1 && (
-            <div style={{ fontSize: 10, color: C.dim, marginTop: 6 }}>※ {st.t}는 NASDAQ 100 비편입(금융·에너지 등) → SPX 기준만 적용.</div>
-          )}
-        </div>
-      )}
+        );
+      })()}
     </Card>
   );
 }
 
 /* ── 메인 앱 ─────────────────────────────────────────────────── */
-export default function Dashboard() {
+export default function App() {
   const [tab, setTab] = useState("overview");
   const [ovQuery, setOvQuery] = useState("");
   const [ovSelected, setOvSelected] = useState(null);
@@ -810,20 +1022,25 @@ export default function Dashboard() {
   const [btAmount, setBtAmount] = useState("10000");
   const [btResult, setBtResult] = useState(null);
   const [btError, setBtError] = useState("");
+  // 오늘 기준 30일 이벤트 자동 생성 (아티팩트는 고정 날짜, 배포판은 실제 오늘)
+  const todayISO = new Date().toISOString().slice(0, 10);   // 배포판: 실제 오늘
+  const events = useMemo(() => generateEvents(todayISO, 30), [todayISO]);
   // 실시간 갱신 상태
-  const [live, setLive] = useState({});        // { NVDA: {close, c, score, pull, ...}, ... }
+  const [live, setLive] = useState({});
   const [loading, setLoading] = useState(false);
   const [liveMsg, setLiveMsg] = useState("");
-  const [lastUpdated, setLastUpdated] = useState(null);  // 실제 갱신 완료 시각
-  const [asOfDate, setAsOfDate] = useState(null);        // 지수 실제 거래일(YYYY-MM-DD)
-  // 지수·확인지표 실시간 덮어쓰기 상태 (없으면 기본 IDX/CONFIRM 사용)
-  const [liveIdx, setLiveIdx] = useState(null);     // { NDX:{...}, SPX:{...} }
-  const [liveConf, setLiveConf] = useState(null);   // { vix, vixPrev, hyg20 }
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [asOfDate, setAsOfDate] = useState(null);
+  const [liveIdx, setLiveIdx] = useState(null);
+  const [liveConf, setLiveConf] = useState(null);
   const idxData = useMemo(() => {
     const base = { NDX: { ...IDX.NDX }, SPX: { ...IDX.SPX } };
     if (liveIdx) {
       ["NDX", "SPX"].forEach((k) => {
-        if (liveIdx[k] && !liveIdx[k].error) base[k] = { ...base[k], ...liveIdx[k] };
+        const d = liveIdx[k];
+        if (!d || d.error) return;
+        if (d.isProxy) base[k] = { ...base[k], gapPct: d.gapPct ?? base[k].gapPct, slopePct: d.slopePct ?? base[k].slopePct, _proxy: d.source };
+        else base[k] = { ...base[k], ...d };
       });
     }
     return base;
@@ -832,42 +1049,38 @@ export default function Dashboard() {
   const conf = useMemo(() => calcConfirm(confData), [confData]);
   const ndx = calcIndex(idxData.NDX), spx = calcIndex(idxData.SPX);
 
-  // 실제 API에서 데이터 갱신 (서버 라우트 호출 → 키는 서버에 숨김)
   async function refreshLive(symbols) {
     setLoading(true);
     setLiveMsg("최신 데이터를 불러오는 중… (지수·지표·종목)");
-    let stockOk = 0, macroOk = false;
-    // 1) 지수·확인지표 갱신
+    let stockOk = 0, idxNote = "";
     try {
       const mResp = await fetch("/api/macro");
       const mJson = await mResp.json();
       if (mResp.ok && mJson.ok) {
-        if (mJson.idx) { setLiveIdx(mJson.idx); if (mJson.idx.NDX && mJson.idx.NDX.asOf) setAsOfDate(mJson.idx.NDX.asOf); }
+        if (mJson.idx) {
+          setLiveIdx(mJson.idx);
+          if (mJson.idx.NDX && mJson.idx.NDX.asOf) setAsOfDate(mJson.idx.NDX.asOf);
+          const ndxOk = mJson.idx.NDX && !mJson.idx.NDX.error;
+          idxNote = ndxOk ? (mJson.idx.NDX.isProxy ? `지수=ETF프록시(${mJson.idx.NDX.source})` : "지수=실시간") : "지수=갱신실패";
+        }
         if (mJson.confirm && Object.keys(mJson.confirm).length) setLiveConf(mJson.confirm);
-        macroOk = true;
-      }
-    } catch (e) { /* 지수 갱신 실패는 무시하고 종목만 진행 */ }
-
-    // 2) 종목 갱신 (8개씩 끊어서 순차 호출 → 무료 한도 보호)
+      } else idxNote = "지수=API오류";
+    } catch (e) { idxNote = "지수=네트워크오류"; }
     try {
       const merged = { ...live };
       for (let i = 0; i < symbols.length; i += 8) {
         const batch = symbols.slice(i, i + 8);
         const resp = await fetch(`/api/quote?symbols=${encodeURIComponent(batch.join(","))}`);
         const json = await resp.json();
-        if (resp.ok && json.data) {
-          Object.entries(json.data).forEach(([sym, d]) => { if (!d.error) { merged[sym] = d; stockOk++; } });
-        }
+        if (resp.ok && json.data) Object.entries(json.data).forEach(([sym, d]) => { if (!d.error) { merged[sym] = d; stockOk++; } });
         setLive({ ...merged });
         setLiveMsg(`갱신 중… 종목 ${stockOk}개 완료`);
       }
-      setLiveMsg(`갱신 완료 · 종목 ${stockOk}개${macroOk ? " · 지수/지표 포함" : " (지수/지표는 플랜 제한으로 생략됨)"} · ${new Date().toLocaleTimeString("ko-KR")}`);
+      setLiveMsg(`갱신 완료 · 종목 ${stockOk}개 · ${idxNote || "지수=미확인"} · ${new Date().toLocaleTimeString("ko-KR")}`);
       setLastUpdated(new Date());
     } catch (e) {
       setLiveMsg("갱신 실패: " + e.message + " — API 키/한도를 확인하세요.");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
 
   const allStocks = useMemo(() => {
@@ -876,30 +1089,26 @@ export default function Dashboard() {
     SECTORS.forEach((s) => s.stocks.forEach((st) => {
       analyzed[st.t] = { ...st, sector: s.sector, color: s.color, score: stockScore(st.c), analyzed: true };
     }));
-    // 실시간 데이터가 있으면 해당 종목의 c/score/pull을 실제값으로 덮어쓰기
+    // 실시간 데이터가 있으면 해당 종목의 c/score/pull을 실제값(7항목)으로 덮어쓰기
     Object.entries(live).forEach(([sym, d]) => {
-      if (analyzed[sym]) {
-        analyzed[sym] = { ...analyzed[sym], c: d.c, score: d.score, pull: d.pull, close: d.close, live: true };
-      } else {
-        analyzed[sym] = { t: sym, sector: "기타", color: "#8B97A8", c: d.c, score: d.score, pull: d.pull, close: d.close, note: "실시간 데이터 기반 계산.", analyzed: true, live: true };
-      }
+      if (analyzed[sym]) analyzed[sym] = { ...analyzed[sym], c: d.c, score: d.score, pull: d.pull, close: d.close, live: true };
+      else analyzed[sym] = { t: sym, sector: "기타", color: "#8B97A8", c: d.c, score: d.score, pull: d.pull, close: d.close, note: "실시간 데이터 기반 계산.", analyzed: true, live: true };
     });
     // NDX100 전체를 기준으로 병합 (분석값 있으면 사용, 없으면 미분석)
     const merged = NDX100.map((m) => {
-      if (analyzed[m.t]) return { ...analyzed[m.t], name: m.n, px: m.px };
+      if (analyzed[m.t]) return { ...analyzed[m.t], name: m.n, px: analyzed[m.t].close != null ? analyzed[m.t].close : m.px };
       return {
         t: m.t, name: m.n, sector: m.sec, color: SECTOR_COLOR[m.sec] || "#8B97A8",
-        pull: null, c: null, score: null, note: "미분석 종목 — 베이스 스캔(C1~C5) 데이터가 아직 없습니다. 백테스트는 가능합니다.",
+        pull: null, c: null, score: null, note: "미분석 종목 — 실데이터 갱신 또는 백테스트로 분석 가능합니다.",
         analyzed: false, px: m.px,
       };
     });
-    // NDX100에 없지만 분석된 종목(HD, XOM 등 SPX 종목)도 추가
     Object.values(analyzed).forEach((a) => {
       if (!NDX_TICKERS.has(a.t)) merged.push(a);
     });
     return merged;
   }, [live]);
-  const ranked = useMemo(() => [...allStocks].filter((s) => s.analyzed).sort((a, b) => b.score - a.score), [allStocks]);
+  const ranked = useMemo(() => [...allStocks].filter((s) => s.analyzed).sort((a, b) => (b.score / b.c.length) - (a.score / a.c.length) || b.score - a.score), [allStocks]);
   const ovFound = ovQuery.trim()
     ? allStocks.filter((s) => s.t.toLowerCase().includes(ovQuery.trim().toLowerCase()))
     : [];
@@ -914,7 +1123,7 @@ export default function Dashboard() {
     { id: "lookup", label: "백테스트", icon: FlaskConical },
   ];
 
-  // 백테스트 실행 핸들러 — 실제 API 시계열 우선, 실패 시 모의 데이터 폴백
+  // 백테스트 실행 핸들러
   const runBT = async () => {
     setBtError("");
     const tk = btTicker.trim().toUpperCase();
@@ -929,22 +1138,27 @@ export default function Dashboard() {
     try {
       const resp = await fetch(`/api/series?symbol=${encodeURIComponent(tk)}&start=${btStart}&end=${btEnd}`);
       const json = await resp.json();
-      if (json.ok && json.values && json.values.length >= 2) {
-        series = json.values;       // [{date, close}]
-        source = "실제 API";
-      }
-    } catch (e) { /* 폴백으로 진행 */ }
-
-    // API 실패 시 기존 모의/앵커 시계열로 폴백
+      if (json.ok && json.values && json.values.length >= 2) { series = json.values; source = "실제 API"; }
+    } catch (e) { /* 폴백 */ }
     if (!series) {
       series = fetchPriceSeries(tk, btStart, btEnd, meta);
       source = REAL_ANCHORS[tk] ? "실제 앵커(보간)" : "모의";
     }
-    setBtError("");
     if (!series || series.length < 2) { setBtError("해당 기간에 거래일이 부족합니다."); setBtResult(null); return; }
 
+    // 지수 시계열(C7·국면 필터용): 실제 QQQ 시도 → 실패 시 모의 벤치마크
+    let idxSeries = null;
+    try {
+      const ir = await fetch(`/api/series?symbol=QQQ&start=${btStart}&end=${btEnd}`);
+      const ij = await ir.json();
+      if (ij.ok && ij.values && ij.values.length >= 2) idxSeries = ij.values;
+    } catch (e) { /* 폴백 */ }
+    if (!idxSeries) idxSeries = fetchPriceSeries("NDX_BENCH", btStart, btEnd, { score: 3, pull: -4 });
+
+    setBtError("");
+    const btOpts = { idxSeries, earnings: meta.earnings };
     const hold = runBacktest(series, amt, meta, false);
-    const strat = runBacktest(series, amt, meta, true);
+    const strat = runBacktest(series, amt, meta, true, btOpts);
     const chart = series.map((p, i) => ({
       date: p.date, "매수후보유": hold.equity[i].value, "전략": strat.equity[i].value,
     }));
@@ -964,7 +1178,6 @@ export default function Dashboard() {
           </div>
           <button
             onClick={() => {
-              // 분석 대상 종목 중 점수 상위 24개를 갱신 (8개씩 3배치, 무료 한도 내)
               const targets = ranked.slice(0, 24).map((s) => s.t);
               refreshLive(targets.length ? targets : ["NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "AVGO", "COST"]);
             }}
@@ -986,7 +1199,7 @@ export default function Dashboard() {
         <div style={{ fontSize: 10.5, color: liveMsg.includes("실패") ? C.down : C.dim, marginBottom: 18, lineHeight: 1.5, padding: "8px 11px", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           {liveMsg
             ? <>↻ {liveMsg}</>
-            : <>↻ <b style={{ color: C.sub }}>실데이터 갱신</b> 버튼을 누르면 Twelve Data API에서 지수(NDX·SPX), 확인지표(VIX·HYG), 상위 24개 종목의 실제 시세를 가져와 점수를 다시 계산합니다. (무료 한도 보호를 위해 8개씩 순차 처리)</>}
+            : <>↻ <b style={{ color: C.sub }}>실데이터 갱신</b>: 지수(NDX·SPX)·확인지표(VIX·HYG·12M ROC)·상위 24개 종목의 실제 시세를 가져와 C1~C7 점수를 다시 계산합니다.</>}
         </div>
         <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
@@ -1007,7 +1220,7 @@ export default function Dashboard() {
         {/* ── 종합 ── */}
         {tab === "overview" && (
           <>
-            <SectionTitle icon={Gauge} sub="gap·slope·vol 점수 → 상태 → 액션">지수 신호 변화</SectionTitle>
+            <SectionTitle icon={Gauge} sub="gap·slope·vol 점수 → 상태 → 액션 (실데이터 갱신 시 실시간)">지수 신호 변화</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 12 }}>
               <IndexCard k="NDX" d={idxData.NDX} /><IndexCard k="SPX" d={idxData.SPX} />
             </div>
@@ -1056,7 +1269,7 @@ export default function Dashboard() {
             {ovQuery.trim() !== "" && ovFound.length > 0 && !ovSelected && (
               <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                 {ovFound.map((st) => {
-                  const g = grade(st.score);
+                  const g = grade(st.score, (st.c ? st.c.length : 5));
                   return (
                     <button key={st.t} onClick={() => setOvSelected(st.t)} style={{
                       display: "flex", alignItems: "center", gap: 11, padding: "11px 14px", borderRadius: 10, cursor: "pointer", textAlign: "left",
@@ -1066,7 +1279,7 @@ export default function Dashboard() {
                       <span style={{ fontSize: 14, fontWeight: 700, color: C.text, minWidth: 52 }}>{st.t}</span>
                       <span style={{ fontSize: 11, color: C.sub, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{st.name || st.sector}</span>
                       {st.analyzed
-                        ? <span style={{ fontSize: 14, fontWeight: 800, color: g.color }}>{st.score}<span style={{ fontSize: 10, color: C.dim }}>/5</span></span>
+                        ? <span style={{ fontSize: 14, fontWeight: 800, color: g.color }}>{st.score}<span style={{ fontSize: 10, color: C.dim }}>/{st.c.length}</span></span>
                         : <span style={{ fontSize: 10, fontWeight: 700, color: C.amber, background: `${C.amber}1A`, padding: "2px 7px", borderRadius: 999 }}>미분석</span>}
                       <ChevronRight size={15} color={C.dim} />
                     </button>
@@ -1092,6 +1305,11 @@ export default function Dashboard() {
         {tab === "confirm" && (
           <>
             <SectionTitle icon={ShieldCheck} sub="C1 추세 · C2 변동성 · C3 신용">확인 지표 (Confirmation)</SectionTitle>
+            <div style={{ fontSize: 10.5, color: C.dim, margin: "0 2px 12px", lineHeight: 1.5 }}>
+              {lastUpdated
+                ? `실시간 갱신됨${confData.vixProxy ? " · VIX는 VIXY 프록시(추세 기준)" : ""} · 12M ROC는 지수 252일 수익률로 산출`
+                : "예시 데이터(미갱신) · '실데이터 갱신' 시 VIX·HYG·12M ROC가 최신값으로 계산됩니다"}
+            </div>
             {conf.all.map((x, i) => (
               <Card key={i} style={{ marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px" }}>
                 <div>
@@ -1116,10 +1334,13 @@ export default function Dashboard() {
         {/* ── 섹터 ── */}
         {tab === "sectors" && (
           <>
-            <SectionTitle icon={Layers} sub="섹터별 베이스 스캔 점수 (C1~C5, 5점 만점)">섹터 리포트</SectionTitle>
+            <SectionTitle icon={Layers} sub="섹터별 베이스 스캔 점수 · 종목 내림차순">섹터 리포트</SectionTitle>
             {SECTORS.map((s) => {
-              const avg = (s.stocks.reduce((a, b) => a + stockScore(b.c), 0) / s.stocks.length).toFixed(1);
-              const top = [...s.stocks].sort((a, b) => stockScore(b.c) - stockScore(a.c))[0];
+              // 충족률(점수/만점) 기준으로 정렬·평균 (5점·7점 종목 혼재 대응)
+              const sorted = [...s.stocks].sort((a, b) => (b.c.reduce((x, y) => x + y, 0) / b.c.length) - (a.c.reduce((x, y) => x + y, 0) / a.c.length));
+              const avgRatio = s.stocks.reduce((a, b) => a + stockScore(b.c) / b.c.length, 0) / s.stocks.length;
+              const avgPct = Math.round(avgRatio * 100);
+              const top = sorted[0];
               return (
                 <Card key={s.sector} style={{ marginBottom: 12 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -1127,14 +1348,14 @@ export default function Dashboard() {
                       <span style={{ width: 9, height: 9, borderRadius: 3, background: s.color }} />
                       <b style={{ fontSize: 15 }}>{s.sector}</b>
                     </div>
-                    <div style={{ fontSize: 12, color: C.sub }}>평균 <b style={{ color: s.color }}>{avg}</b>/5 · 최강 {top.t}</div>
+                    <div style={{ fontSize: 12, color: C.sub }}>충족률 <b style={{ color: s.color }}>{avgPct}%</b> · 최강 {top.t}</div>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
-                    {s.stocks.map((st) => {
-                      const sc = stockScore(st.c), g = grade(sc);
+                    {sorted.map((st) => {
+                      const sc = stockScore(st.c), g = grade(sc, st.c.length);
                       return (
                         <span key={st.t} title={st.note} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${g.color}33`, fontSize: 12, fontWeight: 600 }}>
-                          {st.t} <span style={{ color: g.color }}>{sc}</span>
+                          {st.t} <span style={{ color: g.color }}>{sc}<span style={{ color: C.dim, fontSize: 10 }}>/{st.c.length}</span></span>
                         </span>
                       );
                     })}
@@ -1148,10 +1369,10 @@ export default function Dashboard() {
         {/* ── 베이스 스캔 (랭킹) ── */}
         {tab === "scan" && (
           <>
-            <SectionTitle icon={TrendingUp} sub="C1 추세+C2 풀백+C3 베이스+C4 MA20+C5 돌파">베이스 스캔 하이라이트</SectionTitle>
-            <div style={{ fontSize: 11.5, color: C.dim, margin: "0 2px 12px", fontStyle: "italic" }}>전략 기준 — C1: 추세 · C2: 풀백(-5%~-18%) · C3: 베이스 횡보 · C4: MA20 수렴 · C5: 돌파</div>
+            <SectionTitle icon={TrendingUp} sub="충족률(점수/만점) 내림차순 · C1~C7">베이스 스캔 하이라이트</SectionTitle>
+            <div style={{ fontSize: 11.5, color: C.dim, margin: "0 2px 12px", fontStyle: "italic" }}>C1 추세 · C2 풀백 · C3 베이스 · C4 MA20수렴 · C5 돌파 · C6 거래량 · C7 지수환경 (종목별 5~7항목)</div>
             {ranked.map((st, i) => {
-              const g = grade(st.score);
+              const g = grade(st.score, (st.c ? st.c.length : 5));
               return (
                 <Card key={st.t} style={{ marginBottom: 8, padding: "13px 16px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -1165,7 +1386,7 @@ export default function Dashboard() {
                       <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3, lineHeight: 1.5 }}>{st.note}</div>
                     </div>
                     <div style={{ textAlign: "center" }}>
-                      <div style={{ fontSize: 20, fontWeight: 800, color: g.color, fontVariantNumeric: "tabular-nums" }}>{st.score}</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: g.color, fontVariantNumeric: "tabular-nums" }}>{st.score}<span style={{ fontSize: 11, color: C.dim }}>/{st.c.length}</span></div>
                       <div style={{ display: "flex", gap: 2, justifyContent: "center", marginTop: 2 }}>
                         {st.c.map((v, j) => <span key={j} style={{ width: 5, height: 5, borderRadius: 1.5, background: v ? g.color : C.line }} />)}
                       </div>
@@ -1180,8 +1401,11 @@ export default function Dashboard() {
         {/* ── 이벤트 ── */}
         {tab === "calendar" && (
           <>
-            <SectionTitle icon={Calendar} sub="다음 주 핵심 이벤트 · 시장 영향 방향">매크로 캘린더 & 리스크</SectionTitle>
-            {EVENTS.map((e, i) => {
+            <SectionTitle icon={Calendar} sub="오늘부터 30일 · 정기 이벤트 자동 생성 · 오름차순">매크로 캘린더 & 리스크</SectionTitle>
+            <div style={{ fontSize: 10.5, color: C.dim, margin: "0 2px 12px", lineHeight: 1.5 }}>
+              일정은 FOMC·CPI·고용보고서 등 정기 이벤트를 오늘 기준으로 자동 계산합니다. 각 이벤트의 ±평가는 '실데이터 갱신' 시 최신 뉴스 기반으로 채워집니다.
+            </div>
+            {events.map((e, i) => {
               const bc = e.bias === "plus" ? C.up : e.bias === "minus" ? C.down : C.sub;
               const bl = e.bias === "plus" ? "플러스 요인" : e.bias === "minus" ? "마이너스 요인" : "중립";
               return (
@@ -1246,7 +1470,7 @@ export default function Dashboard() {
               }}><FlaskConical size={16} /> 백테스트 실행</button>
               {btError && <div style={{ marginTop: 10, fontSize: 12, color: C.down }}>{btError}</div>}
               <div style={{ marginTop: 10, fontSize: 10, color: C.dim, lineHeight: 1.5 }}>
-                ※ NVDA는 웹에서 수집한 실제 주가 앵커(2025-06~2026-06)를 주별 보간한 데이터입니다. 그 외 종목은 모의 시계열이며, 실 시세 API 연동 시 fetchPriceSeries()만 교체하면 됩니다.
+                ※ 백테스트는 실제 시세 API(/api/series)를 우선 사용하고, 실패 시 모의 시계열로 폴백합니다. 차트 우측 상단 배지에 데이터 출처(실제 API/모의)가 표시됩니다.
               </div>
             </Card>
 
@@ -1273,6 +1497,12 @@ export default function Dashboard() {
                         </div>
                         <div style={{ fontSize: 10, color: C.dim, marginTop: 8, lineHeight: 1.5 }}>
                           최대낙폭 {b.r.maxDD.toFixed(1)}%{b.key === "strat" ? ` · 매매 ${b.r.trades}회` : ""}
+                          {b.key === "strat" && (
+                            <div style={{ marginTop: 3, fontSize: 9, color: C.dim, lineHeight: 1.5 }}>
+                              손절 {b.r.stops || 0} · 추적손절 {b.r.trails || 0} · 익절 {b.r.takes || 0}
+                              {(b.r.skipsRR || b.r.skipsEarn) ? ` · 진입거름(손익비 ${b.r.skipsRR || 0}/실적 ${b.r.skipsEarn || 0})` : ""}
+                            </div>
+                          )}
                         </div>
                       </Card>
                     );

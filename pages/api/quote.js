@@ -19,9 +19,19 @@ export default async function handler(req, res) {
 
   try {
     const results = {};
-    // 종목별로 순차 호출 (무료 플랜의 분당 호출 제한을 피하기 위함)
+
+    // C7 계산용 지수(나스닥100=QQQ) 시계열 1회 조회 (실패해도 종목 계산은 진행)
+    let idxCloses = null;
+    try {
+      const ir = await fetch(`https://api.twelvedata.com/time_series?symbol=QQQ&interval=1day&outputsize=60&apikey=${apiKey}`);
+      const ij = await ir.json();
+      if (ij.values) idxCloses = ij.values.map((v) => parseFloat(v.close)).filter((n) => !isNaN(n));
+    } catch (e) { /* 지수 없으면 C7=0 처리 */ }
+    const idxClose = idxCloses ? idxCloses[0] : null;
+    const idxMa50 = idxCloses && idxCloses.length >= 50 ? idxCloses.slice(0, 50).reduce((a, b) => a + b, 0) / 50 : null;
+    const idxRet20 = idxCloses && idxCloses[20] ? (idxClose / idxCloses[20] - 1) : null;
+
     for (const sym of symbols) {
-      // 1) 일별 시계열 250개 (MA200 계산 + 52주 고점 산출용)
       const tsUrl = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=1day&outputsize=260&apikey=${apiKey}`;
       const tsResp = await fetch(tsUrl);
       const tsData = await tsResp.json();
@@ -31,34 +41,45 @@ export default async function handler(req, res) {
         continue;
       }
 
-      // values는 최신순 배열. 종가만 숫자로 변환
       const closes = tsData.values.map((v) => parseFloat(v.close)).filter((n) => !isNaN(n));
       const highs = tsData.values.map((v) => parseFloat(v.high)).filter((n) => !isNaN(n));
+      const vols = tsData.values.map((v) => parseFloat(v.volume)).filter((n) => !isNaN(n));
       const close = closes[0];
       const prevClose = closes[1];
 
-      // MA200 (종가 200개 평균)
       const ma200arr = closes.slice(0, 200);
       const ma200 = ma200arr.length ? ma200arr.reduce((a, b) => a + b, 0) / ma200arr.length : null;
-      // MA20
       const ma20arr = closes.slice(0, 20);
       const ma20 = ma20arr.length ? ma20arr.reduce((a, b) => a + b, 0) / ma20arr.length : null;
-      // 52주 고점
       const high52 = highs.length ? Math.max(...highs.slice(0, 252)) : null;
-      // 30일 고점
       const high30 = highs.length ? Math.max(...highs.slice(0, 30)) : null;
 
-      const pull = high52 ? ((close - high52) / high52) * 100 : null;       // 고점 대비 풀백%
-      const fromMA20 = ma20 ? ((close - ma20) / ma20) * 100 : null;          // MA20 이격도%
+      const pull = high52 ? ((close - high52) / high52) * 100 : null;
+      const fromMA20 = ma20 ? ((close - ma20) / ma20) * 100 : null;
       const dayChg = prevClose ? ((close - prevClose) / prevClose) * 100 : null;
 
-      // 베이스 스캔 C1~C5 계산 (대시보드 규칙)
-      const c1 = ma200 != null && close > ma200 ? 1 : 0;                      // 추세
-      const c2 = pull != null && pull <= -5 && pull >= -18 ? 1 : 0;           // 풀백 -5~-18%
-      const c3 = c1 && pull != null && pull <= -3 && pull >= -15 ? 1 : 0;     // 베이스(추세+적정조정)
-      const c4 = fromMA20 != null && Math.abs(fromMA20) <= 4 ? 1 : 0;         // MA20 수렴(±4%)
-      const c5 = high30 != null && close >= high30 * 0.98 ? 1 : 0;            // 30일 고점 돌파(근접)
+      const c1 = ma200 != null && close > ma200 ? 1 : 0;
+      const c2 = pull != null && pull <= -5 && pull >= -18 ? 1 : 0;
+      const c3 = c1 && pull != null && pull <= -3 && pull >= -15 ? 1 : 0;
+      const c4 = fromMA20 != null && Math.abs(fromMA20) <= 4 ? 1 : 0;
+      const c5 = high30 != null && close >= high30 * 0.98 ? 1 : 0;
 
+      // C6 거래량: 당일 거래량 ≥ 20일 평균 × 1.5
+      let c6 = 0;
+      if (vols.length >= 21) {
+        const today = vols[0];
+        const past = vols.slice(1, 21);
+        const avgVol = past.reduce((a, b) => a + b, 0) / past.length;
+        if (avgVol > 0 && today >= avgVol * 1.5) c6 = 1;
+      }
+      // C7 지수환경: 지수 50일선 위 AND 종목 20일 수익률 > 지수 20일 수익률
+      let c7 = 0;
+      if (idxMa50 != null && idxClose != null && idxRet20 != null && closes[20]) {
+        const stockRet20 = close / closes[20] - 1;
+        if (idxClose > idxMa50 && stockRet20 > idxRet20) c7 = 1;
+      }
+
+      const c = [c1, c2, c3, c4, c5, c6, c7];
       results[sym] = {
         close: +close.toFixed(2),
         prevClose: prevClose != null ? +prevClose.toFixed(2) : null,
@@ -67,8 +88,8 @@ export default async function handler(req, res) {
         ma20: ma20 != null ? +ma20.toFixed(2) : null,
         high52: high52 != null ? +high52.toFixed(2) : null,
         pull: pull != null ? +pull.toFixed(1) : null,
-        c: [c1, c2, c3, c4, c5],
-        score: c1 + c2 + c3 + c4 + c5,
+        c,
+        score: c.reduce((a, b) => a + b, 0),
         updatedAt: new Date().toISOString(),
       };
     }
