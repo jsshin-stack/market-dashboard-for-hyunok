@@ -767,6 +767,8 @@ export default function Dashboard() {
   const [live, setLive] = useState({});        // { NVDA: {close, c, score, pull, ...}, ... }
   const [loading, setLoading] = useState(false);
   const [liveMsg, setLiveMsg] = useState("");
+  const [lastUpdated, setLastUpdated] = useState(null);  // 실제 갱신 완료 시각
+  const [asOfDate, setAsOfDate] = useState(null);        // 지수 실제 거래일(YYYY-MM-DD)
   // 지수·확인지표 실시간 덮어쓰기 상태 (없으면 기본 IDX/CONFIRM 사용)
   const [liveIdx, setLiveIdx] = useState(null);     // { NDX:{...}, SPX:{...} }
   const [liveConf, setLiveConf] = useState(null);   // { vix, vixPrev, hyg20 }
@@ -793,7 +795,7 @@ export default function Dashboard() {
       const mResp = await fetch("/api/macro");
       const mJson = await mResp.json();
       if (mResp.ok && mJson.ok) {
-        if (mJson.idx) setLiveIdx(mJson.idx);
+        if (mJson.idx) { setLiveIdx(mJson.idx); if (mJson.idx.NDX && mJson.idx.NDX.asOf) setAsOfDate(mJson.idx.NDX.asOf); }
         if (mJson.confirm && Object.keys(mJson.confirm).length) setLiveConf(mJson.confirm);
         macroOk = true;
       }
@@ -813,6 +815,7 @@ export default function Dashboard() {
         setLiveMsg(`갱신 중… 종목 ${stockOk}개 완료`);
       }
       setLiveMsg(`갱신 완료 · 종목 ${stockOk}개${macroOk ? " · 지수/지표 포함" : " (지수/지표는 플랜 제한으로 생략됨)"} · ${new Date().toLocaleTimeString("ko-KR")}`);
+      setLastUpdated(new Date());
     } catch (e) {
       setLiveMsg("갱신 실패: " + e.message + " — API 키/한도를 확인하세요.");
     } finally {
@@ -928,7 +931,11 @@ export default function Dashboard() {
             <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> {loading ? "갱신 중…" : "실데이터 갱신"}
           </button>
         </div>
-        <div style={{ fontSize: 12, color: C.dim, marginBottom: 6 }}>기준일 2026-06-15 종가 · 실제 시세 검증 반영 · 매크로 신호 + 베이스 스캔</div>
+        <div style={{ fontSize: 12, color: C.dim, marginBottom: 6 }}>
+          {lastUpdated
+            ? `데이터 기준일 ${asOfDate || "최신"} · 갱신 ${lastUpdated.toLocaleString("ko-KR", { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })} · 실시간 API`
+            : "예시 데이터(미갱신) · 우측 '실데이터 갱신'을 누르면 최신 시세로 업데이트됩니다"}
+        </div>
         <div style={{ fontSize: 10.5, color: liveMsg.includes("실패") ? C.down : C.dim, marginBottom: 18, lineHeight: 1.5, padding: "8px 11px", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           {liveMsg
             ? <>↻ {liveMsg}</>

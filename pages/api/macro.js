@@ -35,6 +35,7 @@ export default async function handler(req, res) {
       const gapPct = maVal ? +(((close - maVal) / maVal) * 100).toFixed(2) : null;
       out.idx[key] = {
         close: +close.toFixed(2),
+        asOf: s.values[0] ? s.values[0].datetime : null,
         prevDay: prevDay != null ? +prevDay.toFixed(2) : null,
         prevWeek: prevWeek != null ? +prevWeek.toFixed(2) : null,
         prevMonth: prevMonth != null ? +prevMonth.toFixed(2) : null,
