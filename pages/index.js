@@ -1283,7 +1283,9 @@ export default function App() {
                   {conf.allPass ? "전지표 통과 — 거시 환경 강세 신호 유효" : "확인지표 일부 미달 — 주의"}
                 </b>
               </div>
-              <div style={{ fontSize: 12, color: C.sub, marginTop: 6 }}>VIX {CONFIRM.vix} (리스크온 구간), HYG +{CONFIRM.hyg20}% (신용 양호). 상세는 확인지표 탭 참고.</div>
+              <div style={{ fontSize: 12, color: C.sub, marginTop: 6 }}>
+                VIX {confData.vix ?? "—"} ({confData.vix != null && confData.vix < 20 ? "리스크온" : confData.vix != null && confData.vix < 30 ? "중립" : "불안"} 구간), HYG {confData.hyg20 != null ? (confData.hyg20 > 0 ? `+${confData.hyg20}` : confData.hyg20) : "—"}% ({confData.hyg20 != null && confData.hyg20 > -2 ? "신용 양호" : "신용 위축"}). 상세는 확인지표 탭 참고.
+              </div>
             </Card>
 
             {/* 종목 검색 → 선택 → 해당 종목 전략 행동 */}
@@ -1381,7 +1383,15 @@ export default function App() {
             <Card style={{ background: conf.allPass ? `${C.up}12` : `${C.down}12`, borderColor: conf.allPass ? `${C.up}44` : `${C.down}44` }}>
               <b style={{ color: conf.allPass ? C.up : C.down, fontSize: 13.5 }}>판정: {conf.allPass ? "거시 환경 강세 신호 유효" : "환경 약화 — 방어적 접근"}</b>
               <div style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.8, marginTop: 6 }}>
-                VIX {CONFIRM.vix}는 전주 {CONFIRM.vixPrev}에서 급락 — 불안심리 해소, 20 이하 리스크온 구간. HYG +{CONFIRM.hyg20}%는 신용 스프레드 축소로 기업 신뢰 양호. 12M ROC 양수로 장기 추세 상방.
+                {(() => {
+                  const v = confData.vix, vp = confData.vixPrev, h = confData.hyg20, rn = confData.rocNDX;
+                  const vixDir = (vp != null && v != null) ? (v < vp ? `전주 ${vp}에서 하락` : v > vp ? `전주 ${vp}에서 상승` : `전주와 동일`) : "";
+                  const vixZone = v != null ? (v < 20 ? "20 이하 리스크온 구간" : v < 30 ? "20~30 중립 구간" : "30 이상 불안 구간") : "";
+                  const hygTxt = h != null ? (h > 0 ? `HYG +${h}%는 신용 스프레드 축소로 기업 신뢰 양호` : `HYG ${h}%로 신용 위축 신호`) : "";
+                  const rocTxt = rn != null ? (rn > 0 ? "12M ROC 양수로 장기 추세 상방" : "12M ROC 음수로 장기 추세 약화") : "";
+                  return `VIX ${v ?? "—"}${vixDir ? ` (${vixDir})` : ""} — ${vixZone}. ${hygTxt}. ${rocTxt}.`;
+                })()}
+                {confData.vixProxy ? " (VIX는 VIXY 프록시 기준)" : ""}
               </div>
             </Card>
           </>
