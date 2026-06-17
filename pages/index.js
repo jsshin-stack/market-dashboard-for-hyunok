@@ -518,11 +518,34 @@ function sma(series, idx, win) {
   return s / win;
 }
 
+/* === 특정 시점(idx)의 베이스 스캔 C1~C5 점수 계산 ===
+   대시보드 종목 카드와 동일한 규칙을 그 시점까지의 시계열로 재현.
+   C1 추세: 종가>MA200 / C2 풀백: 52주 고점 대비 -5~-18%
+   C3 베이스: C1 + 적정 조정(-3~-15%) / C4 MA20 수렴: ±4%
+   C5 돌파: 최근 30일 고점의 98% 이상 */
+function scoreAt(series, idx) {
+  const close = series[idx].close;
+  const lo = (n) => Math.max(0, idx - n + 1);
+  const win = (n) => series.slice(lo(n), idx + 1);
+  const closes = win(200).map((d) => d.close);
+  const ma200 = closes.length ? closes.reduce((a, b) => a + b, 0) / closes.length : null;
+  const c20 = win(20).map((d) => d.close);
+  const ma20 = c20.length ? c20.reduce((a, b) => a + b, 0) / c20.length : null;
+  const high52 = Math.max(...win(252).map((d) => d.close));
+  const high30 = Math.max(...win(30).map((d) => d.close));
+  const pull = high52 ? ((close - high52) / high52) * 100 : 0;
+  const fromMA20 = ma20 ? ((close - ma20) / ma20) * 100 : 0;
+  const c1 = ma200 != null && close > ma200 ? 1 : 0;
+  const c2 = pull <= -5 && pull >= -18 ? 1 : 0;
+  const c3 = c1 && pull <= -3 && pull >= -15 ? 1 : 0;
+  const c4 = Math.abs(fromMA20) <= 4 ? 1 : 0;
+  const c5 = close >= high30 * 0.98 ? 1 : 0;
+  return c1 + c2 + c3 + c4 + c5;
+}
+
 /* === 백테스트 실행 ===
    strategyEnabled=false → 시작일 전액 매수 후 보유(Buy&Hold)
-   strategyEnabled=true  → 전략 규칙으로 매수/보유/매도 전환
-     규칙(모멘텀 근사): 종가>20일선 & 점수>=3 → 매수/보유,
-     종가<20일선 또는 약세 → 현금 청산. (베이스 스캔 정신을 일별로 근사)
+   strategyEnabled=true  → C1~C5 점수로: 시작일 매수, ≤2점 매도, ≥4점 재매수, 3점 유지
 */
 function runBacktest(series, capital, meta, strategyEnabled) {
   if (series.length < 2) return null;
@@ -537,12 +560,19 @@ function runBacktest(series, capital, meta, strategyEnabled) {
     if (!strategyEnabled) {
       if (i === 0) { shares = capital / px; cash = 0; inPos = true; }
     } else {
-      const ma = sma(series, i, 20);
-      const bullish = ma != null && px > ma;
-      const strongName = (meta?.score ?? 0) >= 3;
-      const want = bullish && strongName;
-      if (want && !inPos) { shares = cash / px; cash = 0; inPos = true; trades++; }
-      else if (!want && inPos) { cash = shares * px; shares = 0; inPos = false; trades++; }
+      // 전략 매매: 시작일에 전액 매수(보유)로 출발.
+      // 이후 매 시점 C1~C5 점수: ≤2점 매도, ≥4점 재매수, 3점은 현 상태 유지.
+      if (i === 0) {
+        shares = capital / px; cash = 0; inPos = true;   // 초기 진입(매매 횟수 미포함)
+      } else {
+        const sc = scoreAt(series, i);
+        if (inPos && sc <= 2) {
+          cash = shares * px; shares = 0; inPos = false; trades++;   // 매도(신호 약화)
+        } else if (!inPos && sc >= 4) {
+          shares = cash / px; cash = 0; inPos = true; trades++;      // 재매수(신호 강함)
+        }
+        // 3점이거나 그 외에는 현 상태 유지
+      }
     }
     const val = cash + shares * px;
     peak = Math.max(peak, val);
@@ -1226,7 +1256,7 @@ export default function Dashboard() {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
                   {[
                     { key: "hold", title: "매수 후 보유", icon: Wallet, sub: "시작일 전액 매수 → 보유", r: btResult.hold, accent: C.blue },
-                    { key: "strat", title: "전략 매매", icon: Target, sub: "20일선·점수 기반 매수/보유/매도", r: btResult.strat, accent: C.brass },
+                    { key: "strat", title: "전략 매매", icon: Target, sub: "C1~C5 점수: 4점↑매수·2점↓매도", r: btResult.strat, accent: C.brass },
                   ].map((b) => {
                     const up = b.r.profit >= 0;
                     const Icon = b.icon;
