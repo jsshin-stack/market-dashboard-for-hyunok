@@ -1058,6 +1058,27 @@ export default function App() {
   const [asOfDate, setAsOfDate] = useState(null);
   const [liveIdx, setLiveIdx] = useState(null);
   const [liveConf, setLiveConf] = useState(null);
+  const [sectorLive, setSectorLive] = useState(null);   // 섹터 ETF 강약
+  const [sectorLoading, setSectorLoading] = useState(false);
+  const [sectorMsg, setSectorMsg] = useState("");
+
+  // 섹터 ETF 강약 조회 (Finnhub, 섹터당 1회 → 5회로 끝)
+  async function refreshSectors() {
+    setSectorLoading(true);
+    setSectorMsg("섹터 ETF 시세 조회 중…");
+    try {
+      const resp = await fetch("/api/sectors");
+      const json = await resp.json();
+      if (resp.ok && json.ok) {
+        setSectorLive(json.sectors);
+        setSectorMsg(`갱신 완료 · ${new Date().toLocaleTimeString("ko-KR")}`);
+      } else {
+        setSectorMsg("조회 실패: " + (json.error || "오류") + " — FINNHUB_API_KEY를 확인하세요.");
+      }
+    } catch (e) {
+      setSectorMsg("조회 오류: " + e.message);
+    } finally { setSectorLoading(false); }
+  }
   const idxData = useMemo(() => {
     const base = { NDX: { ...IDX.NDX }, SPX: { ...IDX.SPX } };
     if (liveIdx) {
@@ -1400,28 +1421,81 @@ export default function App() {
         {/* ── 섹터 ── */}
         {tab === "sectors" && (
           <>
-            <SectionTitle icon={Layers} sub="섹터별 베이스 스캔 점수 · 종목 내림차순">섹터 리포트</SectionTitle>
+            <SectionTitle icon={Layers} sub="섹터 ETF 강약(실시간) + 개별 종목 베이스 스캔">섹터 리포트</SectionTitle>
+
+            {/* 섹터 ETF 강약 (Finnhub, 빠른 실시간) */}
+            <Card style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <b style={{ fontSize: 13.5 }}>섹터 강약 (ETF 기준)</b>
+                <button onClick={refreshSectors} disabled={sectorLoading} style={{
+                  display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 8, cursor: sectorLoading ? "wait" : "pointer",
+                  background: sectorLoading ? C.line : `${C.brass}22`, border: `1px solid ${C.brass}55`, color: C.brass, fontSize: 12, fontWeight: 700,
+                }}>
+                  <RefreshCw size={12} style={sectorLoading ? { animation: "spin 1s linear infinite" } : undefined} /> 섹터 갱신
+                </button>
+              </div>
+              {sectorMsg && <div style={{ fontSize: 10.5, color: sectorMsg.includes("실패") || sectorMsg.includes("오류") ? C.down : C.dim, marginBottom: 10 }}>{sectorMsg}</div>}
+              {!sectorLive && !sectorMsg && (
+                <div style={{ fontSize: 11, color: C.dim, lineHeight: 1.6 }}>
+                  '섹터 갱신'을 누르면 섹터별 대표 ETF(SOXX·XLK·IGV·XLV·XLY)의 실시간 등락과 52주 고점 대비 위치를 가져와 섹터 강약을 보여줍니다. (섹터당 호출 1회 — 빠르고 한도 부담 없음)
+                </div>
+              )}
+              {sectorLive && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {[...sectorLive].sort((a, b) => (b.dayChg ?? -99) - (a.dayChg ?? -99)).map((s) => {
+                    const up = (s.dayChg ?? 0) >= 0;
+                    return (
+                      <div key={s.sector} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 9, background: C.panel2, border: `1px solid ${s.color}33` }}>
+                        <span style={{ width: 9, height: 9, borderRadius: 3, background: s.color, flexShrink: 0 }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700 }}>{s.sector} <span style={{ fontSize: 10, color: C.dim }}>{s.etf}</span></div>
+                          {s.pull != null && <div style={{ fontSize: 10, color: C.dim }}>52주 고점 대비 {s.pull > 0 ? "+" : ""}{s.pull}%</div>}
+                        </div>
+                        {s.ok
+                          ? <div style={{ textAlign: "right" }}>
+                              <div style={{ fontSize: 15, fontWeight: 800, color: up ? C.up : C.down, fontVariantNumeric: "tabular-nums" }}>{up ? "+" : ""}{s.dayChg}%</div>
+                              <div style={{ fontSize: 10, color: C.dim }}>${s.price}</div>
+                            </div>
+                          : <span style={{ fontSize: 10, color: C.down }}>조회 실패</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+
+            <div style={{ fontSize: 11, color: C.sub, margin: "0 2px 8px", fontWeight: 600 }}>개별 종목 베이스 스캔</div>
+            <div style={{ fontSize: 10.5, color: C.dim, margin: "0 2px 12px", lineHeight: 1.5 }}>
+              {lastUpdated ? `실시간 갱신 반영됨 · 갱신된 종목은 C1~C7(7항목), 미갱신 종목은 기존 C1~C5(5항목) 기준` : "예시 데이터 기준 · 종합 탭에서 종목을 조회하면 여기에도 C1~C7로 반영됩니다"}
+            </div>
             {SECTORS.map((s) => {
-              // 충족률(점수/만점) 기준으로 정렬·평균 (5점·7점 종목 혼재 대응)
-              const sorted = [...s.stocks].sort((a, b) => (b.c.reduce((x, y) => x + y, 0) / b.c.length) - (a.c.reduce((x, y) => x + y, 0) / a.c.length));
-              const avgRatio = s.stocks.reduce((a, b) => a + stockScore(b.c) / b.c.length, 0) / s.stocks.length;
+              // allStocks(실시간 병합)에서 이 섹터 종목을 가져온다. 갱신 시 c가 7항목으로 바뀜.
+              const stocks = s.stocks
+                .map((base) => allStocks.find((a) => a.t === base.t) || { ...base, score: stockScore(base.c) })
+                .filter((st) => st && st.c);
+              if (!stocks.length) return null;
+              const sorted = [...stocks].sort((a, b) => (b.score / b.c.length) - (a.score / a.c.length));
+              const avgRatio = stocks.reduce((a, b) => a + (b.score / b.c.length), 0) / stocks.length;
               const avgPct = Math.round(avgRatio * 100);
               const top = sorted[0];
+              const anyLive = stocks.some((st) => st.live);
               return (
                 <Card key={s.sector} style={{ marginBottom: 12 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ width: 9, height: 9, borderRadius: 3, background: s.color }} />
                       <b style={{ fontSize: 15 }}>{s.sector}</b>
+                      {anyLive && <span style={{ fontSize: 9, color: C.up, background: `${C.up}1A`, padding: "1px 6px", borderRadius: 999, fontWeight: 700 }}>LIVE</span>}
                     </div>
                     <div style={{ fontSize: 12, color: C.sub }}>충족률 <b style={{ color: s.color }}>{avgPct}%</b> · 최강 {top.t}</div>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
                     {sorted.map((st) => {
-                      const sc = stockScore(st.c), g = grade(sc, st.c.length);
+                      const g = grade(st.score, st.c.length);
                       return (
                         <span key={st.t} title={st.note} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${g.color}33`, fontSize: 12, fontWeight: 600 }}>
-                          {st.t} <span style={{ color: g.color }}>{sc}<span style={{ color: C.dim, fontSize: 10 }}>/{st.c.length}</span></span>
+                          {st.live && <span style={{ width: 5, height: 5, borderRadius: 999, background: C.up }} />}
+                          {st.t} <span style={{ color: g.color }}>{st.score}<span style={{ color: C.dim, fontSize: 10 }}>/{st.c.length}</span></span>
                         </span>
                       );
                     })}
