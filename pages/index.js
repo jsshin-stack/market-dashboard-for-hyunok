@@ -302,6 +302,14 @@ function calcIndex(d) {
   };
 }
 const stockScore = (c) => c.reduce((a, b) => a + b, 0);
+// C1~C5 한 줄 설명 (카드 하단 범례용)
+const C_LEGEND = [
+  "추세: 주가가 200일선 위 (상승 추세)",
+  "풀백: 고점 대비 -5~-18% 건전한 조정",
+  "베이스: 추세 유지하며 가격 다지는 중",
+  "MA20 수렴: 20일선 근처(±4%)로 모임",
+  "돌파: 최근 30일 고점 돌파/근접",
+];
 function grade(s) {
   if (s >= 4) return { label: "1순위 매수 후보", color: C.up, dot: "🟢" };
   if (s === 3) return { label: "관찰 / 부분 매수", color: C.brass, dot: "🟡" };
@@ -704,6 +712,15 @@ function StockSignalCard({ st, idxStates, conf }) {
           <div key={j} style={{ textAlign: "center", padding: "8px 2px", borderRadius: 8, background: v ? `${g.color}1A` : C.panel2, border: `1px solid ${v ? `${g.color}44` : C.line}` }}>
             <div style={{ fontSize: 14, color: v ? g.color : C.dim }}>{v ? "✓" : "—"}</div>
             <div style={{ fontSize: 9, color: C.dim, marginTop: 2 }}>{labels[j]}</div>
+          </div>
+        ))}
+      </div>
+      {/* C1~C5 한 줄 설명 */}
+      <div style={{ marginTop: 8, fontSize: 9.5, color: C.dim, lineHeight: 1.7 }}>
+        {C_LEGEND.map((d, j) => (
+          <div key={j} style={{ display: "flex", gap: 5 }}>
+            <span style={{ color: st.c[j] ? g.color : C.dim, fontWeight: 700, minWidth: 18 }}>{st.c[j] ? "✓" : "—"} C{j + 1}</span>
+            <span>{d}</span>
           </div>
         ))}
       </div>
