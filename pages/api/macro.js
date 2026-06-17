@@ -5,12 +5,24 @@
 // 주의: 일부 무료 플랜은 지수(NDX 등) 접근이 제한될 수 있어, 실패 시 해당 항목만 null로 반환합니다.
 
 async function fetchSeries(symbol, apiKey, size = 260) {
-  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=1day&outputsize=${size}&apikey=${apiKey}`;
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=1day&outputsize=${size}&timezone=America/New_York&apikey=${apiKey}`;
   const r = await fetch(url);
   const d = await r.json();
   if (d.status === "error" || !d.values) return { error: d.message || "데이터 없음" };
   const closes = d.values.map((v) => parseFloat(v.close)).filter((n) => !isNaN(n));
   return { closes, values: d.values };
+}
+// 실시간 최신가(/quote): 일봉 확정 전에도 최신 종가를 반환
+async function fetchLatest(symbol, apiKey) {
+  try {
+    const r = await fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol)}&timezone=America/New_York&apikey=${apiKey}`);
+    const q = await r.json();
+    if (q && q.close && q.datetime) {
+      const c = parseFloat(q.close);
+      if (!isNaN(c)) return { close: c, datetime: q.datetime };
+    }
+  } catch (e) { /* noop */ }
+  return null;
 }
 
 function avg(arr) { return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null; }
@@ -36,20 +48,28 @@ export default async function handler(req, res) {
         if (!r.error && r.closes && r.closes.length > maWin / 2) { s = r; usedSym = sym; break; }
       }
       if (!s) { out.idx[key] = { error: "지수/프록시 모두 접근 불가" }; continue; }
-      const close = s.closes[0], prevDay = s.closes[1];
+      let close = s.closes[0];
+      let asOf = s.values[0] ? s.values[0].datetime : null;
+      // 실시간 최신가 보정: 일봉이 /quote보다 과거면 최신가로 갱신
+      const latest = await fetchLatest(usedSym, apiKey);
+      if (latest && (!asOf || latest.datetime >= asOf)) {
+        if (latest.datetime > asOf) s.closes.unshift(latest.close);
+        else s.closes[0] = latest.close;
+        close = latest.close; asOf = latest.datetime;
+      }
+      const prevDay = s.closes[1];
       const prevWeek = s.closes[5] || null, prevMonth = s.closes[21] || null;
       const maVal = avg(s.closes.slice(0, maWin));
       const maOld = avg(s.closes.slice(20, 20 + maWin));
       const slopePct = maVal && maOld ? +(((maVal - maOld) / maOld) * 100).toFixed(2) : null;
       const gapPct = maVal ? +(((close - maVal) / maVal) * 100).toFixed(2) : null;
-      // 12개월 ROC: 약 252거래일 전 대비 수익률 (프록시 ETF든 지수든 수익률은 동일 의미)
       const idx252 = Math.min(251, s.closes.length - 1);
       const ago = s.closes[idx252];
       const roc12m = ago ? +(((close - ago) / ago) * 100).toFixed(1) : null;
       if (roc12m != null) { if (key === "NDX") out.confirm.rocNDX = roc12m; else out.confirm.rocSPX = roc12m; }
       out.idx[key] = {
         close: +close.toFixed(2),
-        asOf: s.values[0] ? s.values[0].datetime : null,
+        asOf,
         source: usedSym,
         isProxy: usedSym !== key && usedSym !== "GSPC",
         prevDay: prevDay != null ? +prevDay.toFixed(2) : null,

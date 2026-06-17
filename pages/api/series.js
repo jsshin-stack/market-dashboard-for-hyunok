@@ -14,7 +14,7 @@ export default async function handler(req, res) {
 
   try {
     // 기간이 주어지면 그 구간, 아니면 최근 400개
-    let url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=1day&apikey=${apiKey}`;
+    let url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=1day&timezone=America/New_York&apikey=${apiKey}`;
     if (start && end) {
       url += `&start_date=${start}&end_date=${end}&outputsize=5000`;
     } else {

@@ -32,7 +32,7 @@ export default async function handler(req, res) {
     const idxRet20 = idxCloses && idxCloses[20] ? (idxClose / idxCloses[20] - 1) : null;
 
     for (const sym of symbols) {
-      const tsUrl = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=1day&outputsize=260&apikey=${apiKey}`;
+      const tsUrl = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=1day&outputsize=260&timezone=America/New_York&apikey=${apiKey}`;
       const tsResp = await fetch(tsUrl);
       const tsData = await tsResp.json();
 
@@ -44,8 +44,26 @@ export default async function handler(req, res) {
       const closes = tsData.values.map((v) => parseFloat(v.close)).filter((n) => !isNaN(n));
       const highs = tsData.values.map((v) => parseFloat(v.high)).filter((n) => !isNaN(n));
       const vols = tsData.values.map((v) => parseFloat(v.volume)).filter((n) => !isNaN(n));
-      const close = closes[0];
+      let close = closes[0];
+      let latestDate = tsData.values[0] ? tsData.values[0].datetime : null;
       const prevClose = closes[1];
+
+      // 실시간 종가 보정: /quote는 일봉 확정 전에도 최신가를 준다.
+      // time_series의 최신 일봉이 /quote보다 과거면, 최신가를 앞에 끼워 넣는다.
+      try {
+        const qResp = await fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(sym)}&timezone=America/New_York&apikey=${apiKey}`);
+        const q = await qResp.json();
+        if (q && q.close && q.datetime) {
+          const qClose = parseFloat(q.close);
+          // q.datetime이 최신 일봉 날짜보다 뒤(더 최근)면 최신가로 갱신
+          if (!isNaN(qClose) && (!latestDate || q.datetime >= latestDate)) {
+            if (q.datetime > latestDate) { closes.unshift(qClose); highs.unshift(parseFloat(q.high) || qClose); vols.unshift(parseFloat(q.volume) || vols[0]); }
+            else { closes[0] = qClose; }
+            close = qClose;
+            latestDate = q.datetime;
+          }
+        }
+      } catch (e) { /* quote 실패 시 일봉 그대로 사용 */ }
 
       const ma200arr = closes.slice(0, 200);
       const ma200 = ma200arr.length ? ma200arr.reduce((a, b) => a + b, 0) / ma200arr.length : null;
@@ -82,6 +100,7 @@ export default async function handler(req, res) {
       const c = [c1, c2, c3, c4, c5, c6, c7];
       results[sym] = {
         close: +close.toFixed(2),
+        asOf: latestDate,
         prevClose: prevClose != null ? +prevClose.toFixed(2) : null,
         dayChg: dayChg != null ? +dayChg.toFixed(2) : null,
         ma200: ma200 != null ? +ma200.toFixed(2) : null,
