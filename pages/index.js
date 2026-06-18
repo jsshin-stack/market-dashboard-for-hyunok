@@ -1108,10 +1108,10 @@ export default function App() {
       setOvMsg(`${tk} 조회 오류: ${e.message}`);
     } finally { setOvLoading(false); }
   }
-  // 백테스트 입력 상태
+  // 백테스트 입력 상태 (기본: 오늘 기준 최근 1년)
   const [btTicker, setBtTicker] = useState("NVDA");
-  const [btStart, setBtStart] = useState("2025-06-23");
-  const [btEnd, setBtEnd] = useState("2026-06-15");
+  const [btStart, setBtStart] = useState(() => { const d = new Date(); d.setFullYear(d.getFullYear() - 1); return d.toISOString().slice(0, 10); });
+  const [btEnd, setBtEnd] = useState(() => new Date().toISOString().slice(0, 10));
   const [btAmount, setBtAmount] = useState("10000");
   const [btResult, setBtResult] = useState(null);
   const [btError, setBtError] = useState("");
@@ -1264,10 +1264,19 @@ export default function App() {
     SECTORS.forEach((s) => s.stocks.forEach((st) => {
       analyzed[st.t] = { ...st, sector: s.sector, color: s.color, score: stockScore(st.c), analyzed: true };
     }));
-    // 실시간 데이터가 있으면 해당 종목의 c/score/pull을 실제값(7항목)으로 덮어쓰기
+    // 실시간 데이터가 있으면 해당 종목의 c/score/pull을 실제값(7항목)으로 덮어쓰기 + note 동적 생성
+    const liveNote = (d) => {
+      const names = ["정배열", "ATR풀백", "베이스", "변동성수축", "돌파", "거래량", "주도주"];
+      const passed = (d.c || []).map((v, i) => (v ? names[i] : null)).filter(Boolean);
+      const parts = [];
+      if (d.pull != null) parts.push(`고점대비 ${d.pull > 0 ? "+" : ""}${d.pull}%`);
+      if (d.atr != null) parts.push(`ATR ${d.atr}`);
+      parts.push(passed.length ? `충족: ${passed.join("·")}` : "충족 항목 없음");
+      return `실시간 분석 — ${parts.join(" · ")}.`;
+    };
     Object.entries(live).forEach(([sym, d]) => {
-      if (analyzed[sym]) analyzed[sym] = { ...analyzed[sym], c: d.c, score: d.score, pull: d.pull, close: d.close, live: true };
-      else analyzed[sym] = { t: sym, sector: "기타", color: "#8B97A8", c: d.c, score: d.score, pull: d.pull, close: d.close, note: "실시간 데이터 기반 계산.", analyzed: true, live: true };
+      if (analyzed[sym]) analyzed[sym] = { ...analyzed[sym], c: d.c, score: d.score, pull: d.pull, close: d.close, atr: d.atr, per: d.per, pbr: d.pbr, name: d.name || analyzed[sym].name, imminent: d.imminent, chart: d.chart, note: liveNote(d), live: true };
+      else analyzed[sym] = { t: sym, sector: "기타", color: "#A6B0BE", c: d.c, score: d.score, pull: d.pull, close: d.close, atr: d.atr, per: d.per, pbr: d.pbr, name: d.name, imminent: d.imminent, chart: d.chart, note: liveNote(d), analyzed: true, live: true };
     });
     // NDX100 전체를 기준으로 병합 (분석값 있으면 사용, 없으면 미분석)
     const merged = NDX100.map((m) => {
@@ -1402,16 +1411,35 @@ export default function App() {
               <IndexCard k="NDX" d={idxData.NDX} /><IndexCard k="SPX" d={idxData.SPX} />
             </div>
 
-            {/* 지수 전체 전략 행동 — 지수 카드 바로 아래 */}
-            <Card style={{ marginTop: 14 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                <Minus size={15} color={C.blue} /><b style={{ fontSize: 14 }}>지수 전략 행동: 포지션 변경 불필요</b>
-              </div>
-              <div style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.8 }}>
-                NDX는 vol20 {idxData.NDX.vol20}%로 디리스크 임계(25%)를 초과해 BASE 유지(HOLD-{ndx.streak}). SPX는 LEVERAGE 3단계 고착(HOLD-{spx.streak}).
-                두 지수 모두 추세는 강하나 변동성·매크로 이벤트(FOMC)를 앞두고 신규 레버리지 확대보다 <b style={{ color: C.text }}>기존 포지션 유지</b>가 합리적입니다.
-              </div>
-            </Card>
+            {/* 지수 전체 전략 행동 — 지수 상태(state/action)로 동적 생성 */}
+            {(() => {
+              const stLabel = { CASH: "현금(CASH)", BASE: "보유(BASE)", LEVERAGE: "공격(LEVERAGE)" };
+              const acLabel = { HOLD: "유지", BUY: "비중 확대", REDUCE: "비중 축소" };
+              // 두 지수 종합: 더 보수적인 쪽을 기준으로 행동 제시
+              const order = { CASH: 0, BASE: 1, LEVERAGE: 2 };
+              const weaker = order[ndx.state] <= order[spx.state] ? ndx : spx;
+              const weakerK = weaker === ndx ? "NDX" : "SPX";
+              let head, color;
+              if (weaker.state === "CASH") { head = "지수 전략 행동: 신규 매수 자제 · 현금 비중 확대"; color = C.down; }
+              else if (weaker.state === "BASE") { head = "지수 전략 행동: 기존 포지션 유지 · 신규는 선별적"; color = C.amber; }
+              else { head = "지수 전략 행동: 강세 환경 · 분할 매수/비중 확대 가능"; color = C.up; }
+              return (
+                <Card style={{ marginTop: 14, borderColor: `${color}44` }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <Minus size={15} color={color} /><b style={{ fontSize: 14, color }}>{head}</b>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.8 }}>
+                    NDX는 <b style={{ color: C.text }}>{stLabel[ndx.state]}</b> 국면({ndx.action === "HOLD" ? `HOLD-${ndx.streak}` : acLabel[ndx.action]}, 강도 {ndx.strength}),
+                    SPX는 <b style={{ color: C.text }}>{stLabel[spx.state]}</b> 국면({spx.action === "HOLD" ? `HOLD-${spx.streak}` : acLabel[spx.action]}, 강도 {spx.strength}).
+                    {weaker.state === "LEVERAGE"
+                      ? " 두 지수 모두 추세가 강해 신규 진입·비중 확대에 우호적인 구간입니다."
+                      : weaker.state === "BASE"
+                      ? ` ${weakerK}의 변동성이 다소 높아, 공격적 확대보다 기존 포지션 유지가 합리적입니다.`
+                      : ` ${weakerK}가 추세 이탈/고변동 상태라, 신규 매수를 자제하고 현금 비중을 높이는 편이 안전합니다.`}
+                  </div>
+                </Card>
+              );
+            })()}
             <Card style={{ marginTop: 12, borderColor: conf.allPass ? `${C.up}55` : `${C.down}55` }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <ShieldCheck size={16} color={conf.allPass ? C.up : C.down} />
@@ -1865,7 +1893,7 @@ export default function App() {
                 </Card>
 
                 {/* 종목 전략 신호 (현재 시점) */}
-                <div style={{ fontSize: 11, color: C.dim, margin: "4px 2px 8px" }}>참고: {btResult.tk}의 현재(6/15 기준) 베이스 스캔 신호와 전략 행동</div>
+                <div style={{ fontSize: 11, color: C.dim, margin: "4px 2px 8px" }}>참고: {btResult.tk}의 최근 베이스 스캔 신호와 전략 행동</div>
                 <StockSignalCard st={btResult.meta} idxStates={{ NDX: ndx, SPX: spx }} conf={conf} />
               </>
             )}
@@ -1880,7 +1908,7 @@ export default function App() {
         )}
 
         <div style={{ marginTop: 26, padding: "12px 14px", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, fontSize: 10.5, color: C.dim, lineHeight: 1.6 }}>
-          ⚠️ 본 대시보드는 첨부 리포트의 방법론을 구현한 분석 도구이며 투자 자문이 아닙니다. 모든 수치는 2026-06-15 기준이며 실제 매매 전 최신 데이터로 검증하세요. 데이터를 갱신하려면 코드 상단의 IDX·CONFIRM·SECTORS·EVENTS 값을 수정하면 전 화면이 자동 재계산됩니다.
+          ⚠️ 본 대시보드는 첨부 리포트의 방법론을 구현한 분석 도구이며 투자 자문이 아닙니다. 지수·확인지표는 '지수·지표 갱신'으로, 종목·섹터·베이스스캔은 장 마감 후 자동 수집분으로, 이벤트 평가는 탭 진입 시 최신 뉴스로 갱신됩니다. 실제 매매 전 최신 데이터로 다시 검증하세요.
         </div>
       </div>
     </div>
