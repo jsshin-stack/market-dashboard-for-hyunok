@@ -1057,18 +1057,6 @@ export default function App() {
   const [btError, setBtError] = useState("");
   // 오늘 기준 30일 이벤트 자동 생성 (아티팩트는 고정 날짜, 배포판은 실제 오늘)
   const todayISO = new Date().toISOString().slice(0, 10);   // 배포판: 실제 오늘
-  const events = useMemo(() => {
-    const base = generateEvents(todayISO, 30);
-    if (!eventBias) return base;
-    // 이벤트 이름에 포함된 타입 키로 ±평가 매칭
-    return base.map((e) => {
-      const type = Object.keys(eventBias).find((k) => e.ev.includes(k));
-      if (type && eventBias[type]) {
-        return { ...e, bias: eventBias[type].bias, why: eventBias[type].why };
-      }
-      return e;
-    });
-  }, [todayISO, eventBias]);
   // 실시간 갱신 상태
   const [live, setLive] = useState({});
   const [loading, setLoading] = useState(false);
@@ -1084,6 +1072,17 @@ export default function App() {
   const [eventBiasLoading, setEventBiasLoading] = useState(false);
   const [eventBiasAt, setEventBiasAt] = useState(null);
 
+  // 이벤트: 일정은 자동 생성, ±평가는 스냅샷/실시간 조회분을 매칭
+  const events = useMemo(() => {
+    const base = generateEvents(todayISO, 30);
+    if (!eventBias) return base;
+    return base.map((e) => {
+      const type = Object.keys(eventBias).find((k) => e.ev.includes(k));
+      if (type && eventBias[type]) return { ...e, bias: eventBias[type].bias, why: eventBias[type].why };
+      return e;
+    });
+  }, [todayISO, eventBias]);
+
   // 이벤트 탭을 열면 최신 뉴스로 ±평가 실시간 조회
   useEffect(() => {
     if (tab !== "calendar") return;
@@ -1098,7 +1097,7 @@ export default function App() {
       finally { if (!cancelled) setEventBiasLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [tab]);(스냅샷)
+  }, [tab]);
 
   // 섹터 대표 ETF를 C1~C7로 평가 (Twelve Data, 섹터당 1회 = 5회)
   async function refreshSectors() {
