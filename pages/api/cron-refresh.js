@@ -131,6 +131,14 @@ export default async function handler(req, res) {
       idxRef = { close: closes[0], ma50: avg(closes.slice(0, 50)), ret20: closes[20] ? (closes[0] / closes[20] - 1) : null };
       latestDay = qqq[0] ? qqq[0].datetime : null;
     }
+    // QQQ조차 못 받으면 Twelve Data 한도 초과/키 문제 → 종목 루프로 한도 더 낭비하지 말고 즉시 중단
+    if (!qqq) {
+      return res.status(200).json({
+        ok: false, skipped: true,
+        reason: "Twelve Data 응답 없음(일일 한도 초과 또는 키/네트워크 문제 추정). 수집을 건너뜁니다.",
+        hint: "Twelve Data 무료 한도는 UTC 자정(한국시간 오전 9시경)에 리셋됩니다. 외부 스케줄러는 장 마감 후 시간대에만 돌리세요.",
+      });
+    }
 
     // 기존 스냅샷 로드
     let snap = null;
@@ -154,17 +162,27 @@ export default async function handler(req, res) {
     // 아직 안 받은 종목만 추려서 이번 호출 분(CHUNK)만 수집
     const remaining = ALL.filter((s) => !stocks[s]);
     const todo = remaining.slice(0, CHUNK);
-    let ok = 0, fail = 0;
+    let ok = 0, fail = 0, aborted = false;
     for (let i = 0; i < todo.length; i += 6) {
       const batch = todo.slice(i, i + 6);
+      let batchOk = 0;
       await Promise.all(batch.map(async (sym) => {
         try {
           const vals = await timeSeries(sym, key, 260);
-          if (vals) { stocks[sym] = computeScore(vals, idxRef); ok++; }
+          if (vals) { stocks[sym] = computeScore(vals, idxRef); ok++; batchOk++; }
           else fail++;
         } catch (e) { fail++; }
       }));
-      if (i + 6 < todo.length) await sleep(62000);   // 분당 8크레딧 보호
+      // 첫 배치가 전부 실패하면 한도 초과 상태로 보고 즉시 중단(다음 배치 62초 대기 안 함)
+      if (i === 0 && batchOk === 0) { aborted = true; break; }
+      if (i + 6 < todo.length) await sleep(62000);
+    }
+    if (aborted) {
+      return res.status(200).json({
+        ok: false, skipped: true,
+        reason: "종목 수집 첫 배치 전부 실패 → 한도 초과 추정. 이번 호출 중단(한도 보호).",
+        have: ALL.filter((s) => stocks[s]).length, total: ALL.length,
+      });
     }
 
     // 지수/확인지표 + 이벤트는 매 호출 갱신(가벼움)
