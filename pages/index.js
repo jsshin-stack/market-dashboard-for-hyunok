@@ -1491,6 +1491,19 @@ export default function App() {
             </div>
             {sectorMsg && <div style={{ fontSize: 10.5, color: sectorMsg.includes("실패") || sectorMsg.includes("오류") ? C.down : C.dim, marginBottom: 12 }}>↻ {sectorMsg}</div>}
 
+            {/* C1~C7 평가 기준 범례 */}
+            <Card style={{ marginBottom: 14, background: C.panel2 }}>
+              <div style={{ fontSize: 11, color: C.sub, fontWeight: 700, marginBottom: 8 }}>평가 기준 (C1~C7)</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 5 }}>
+                {C_LEGEND.map((d, j) => (
+                  <div key={j} style={{ display: "flex", gap: 7, fontSize: 10.5, color: C.dim, lineHeight: 1.5 }}>
+                    <span style={{ color: C.brass, fontWeight: 700, minWidth: 22, flexShrink: 0 }}>C{j + 1}</span>
+                    <span>{d}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
             {!sectorLive && !sectorMsg && (
               <Card style={{ textAlign: "center", color: C.dim, fontSize: 12.5, padding: "22px 16px" }}>
                 '섹터 갱신'을 누르면 5개 섹터 ETF의 실시간 C1~C7 점수가 평가되어 충족률 순으로 표시됩니다.
