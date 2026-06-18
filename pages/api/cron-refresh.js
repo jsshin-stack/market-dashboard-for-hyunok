@@ -6,6 +6,9 @@
 
 import { Redis } from "@upstash/redis";
 
+// Hobby 플랜 Fluid compute 최대 300초. 한 호출당 ~24종목(약 3분)만 수집하고 이어받기.
+export const maxDuration = 300;
+
 const redis = Redis.fromEnv();
 
 // 수집 대상: NDX100 + 주요 SPX 종목 + 섹터 ETF
@@ -122,43 +125,44 @@ export default async function handler(req, res) {
   const key = process.env.TWELVE_DATA_API_KEY;
   if (!key) return res.status(500).json({ error: "TWELVE_DATA_API_KEY 미설정" });
 
-  // 중복 수집 방지: 이미 같은 거래일(asOf) 데이터가 저장돼 있으면 스킵.
-  // 강제 재수집은 ?force=1 로 호출.
   const force = req.query && (req.query.force === "1" || req.query.force === "true");
-  if (!force) {
-    try {
-      const existing = await redis.get("snapshot:latest");
-      if (existing) {
-        const prev = typeof existing === "string" ? JSON.parse(existing) : existing;
-        // 최신 거래일 확인(QQQ 1회) — 저장된 asOf와 같으면 스킵
-        const probe = await timeSeries("QQQ", key, 2);
-        const latestDay = probe && probe[0] ? probe[0].datetime : null;
-        if (latestDay && prev.asOf === latestDay) {
-          return res.status(200).json({ ok: true, skipped: true, reason: "이미 최신 거래일 수집됨", asOf: prev.asOf });
-        }
-      }
-    } catch (e) { /* 확인 실패 시 그냥 수집 진행 */ }
-  }
+  const CHUNK = 24;   // 한 호출당 수집 종목 수 (4배치×62초 ≈ 3분, Hobby 5분 한도 내 안전)
 
   try {
-    // 1) 지수(QQQ) 먼저 — C7 기준 + 지수 카드용
+    // 최신 거래일 확인 (QQQ 1회) + C7 기준
     const qqq = await timeSeries("QQQ", key, 280);
-    let idxRef = null;
+    let idxRef = null, latestDay = null;
     if (qqq) {
       const closes = qqq.map((v) => parseFloat(v.close)).filter((n) => !isNaN(n));
-      idxRef = {
-        close: closes[0],
-        ma50: avg(closes.slice(0, 50)),
-        ret20: closes[20] ? (closes[0] / closes[20] - 1) : null,
-      };
+      idxRef = { close: closes[0], ma50: avg(closes.slice(0, 50)), ret20: closes[20] ? (closes[0] / closes[20] - 1) : null };
+      latestDay = qqq[0] ? qqq[0].datetime : null;
     }
-    await sleep(8000);
 
-    // 2) 전 종목 + ETF를 6개씩 묶어 수집 (분당 8회 제한 보호)
-    const stocks = {};
+    // 기존 스냅샷 로드
+    let snap = null;
+    try {
+      const existing = await redis.get("snapshot:latest");
+      if (existing) snap = typeof existing === "string" ? JSON.parse(existing) : existing;
+    } catch (e) { /* 없으면 새로 */ }
+
+    // 거래일이 바뀌었거나 force면 새 수집 시작(기존 종목 비움)
+    const sameDay = snap && snap.asOf === latestDay && !force;
+    let stocks = sameDay ? (snap.stocks || {}) : {};
+
+    // 이미 다 받았으면 스킵 (force 아닐 때)
+    if (sameDay && !force) {
+      const have = ALL.filter((s) => stocks[s]).length;
+      if (have >= ALL.length) {
+        return res.status(200).json({ ok: true, done: true, have, total: ALL.length, asOf: latestDay, reason: "이미 전 종목 수집 완료" });
+      }
+    }
+
+    // 아직 안 받은 종목만 추려서 이번 호출 분(CHUNK)만 수집
+    const remaining = ALL.filter((s) => !stocks[s]);
+    const todo = remaining.slice(0, CHUNK);
     let ok = 0, fail = 0;
-    for (let i = 0; i < ALL.length; i += 6) {
-      const batch = ALL.slice(i, i + 6);
+    for (let i = 0; i < todo.length; i += 6) {
+      const batch = todo.slice(i, i + 6);
       await Promise.all(batch.map(async (sym) => {
         try {
           const vals = await timeSeries(sym, key, 260);
@@ -166,32 +170,35 @@ export default async function handler(req, res) {
           else fail++;
         } catch (e) { fail++; }
       }));
-      if (i + 6 < ALL.length) await sleep(62000);   // 다음 배치까지 62초 대기
+      if (i + 6 < todo.length) await sleep(62000);   // 분당 8크레딧 보호
     }
 
-    // 3) 지수/확인지표
+    // 지수/확인지표 + 이벤트는 매 호출 갱신(가벼움)
     const macro = await buildMacro(key, idxRef);
-
-    // 4) 이벤트 ±평가: Finnhub 뉴스로 이벤트 타입별 감성 판정
     const finnhubKey = process.env.FINNHUB_API_KEY;
     const news = await fetchNews(finnhubKey);
     const eventBias = {};
-    Object.keys(EVENT_KEYWORDS).forEach((type) => {
-      eventBias[type] = biasForEvent(type, news);
-    });
+    Object.keys(EVENT_KEYWORDS).forEach((type) => { eventBias[type] = biasForEvent(type, news); });
 
+    const haveNow = ALL.filter((s) => stocks[s]).length;
     const snapshot = {
       updatedAt: new Date().toISOString(),
-      asOf: idxRef ? (qqq[0] ? qqq[0].datetime : null) : null,
-      stockCount: ok, failCount: fail,
-      stocks, macro,
-      eventBias, newsCount: news.length,
+      asOf: latestDay,
+      stockCount: haveNow, failCount: fail,
+      complete: haveNow >= ALL.length,
+      stocks, macro, eventBias, newsCount: news.length,
     };
     await redis.set("snapshot:latest", JSON.stringify(snapshot));
 
-    res.status(200).json({ ok: true, stored: ok, failed: fail, asOf: snapshot.asOf, news: news.length });
+    return res.status(200).json({
+      ok: true, asOf: latestDay,
+      collectedThisCall: ok, failedThisCall: fail,
+      have: haveNow, total: ALL.length,
+      complete: snapshot.complete,
+      message: snapshot.complete ? "전 종목 수집 완료" : `진행 중: ${haveNow}/${ALL.length} (다음 호출에서 이어받기)`,
+    });
   } catch (e) {
-    res.status(500).json({ error: "수집 오류: " + (e.message || String(e)) });
+    return res.status(500).json({ error: "수집 오류: " + (e.message || String(e)) });
   }
 }
 

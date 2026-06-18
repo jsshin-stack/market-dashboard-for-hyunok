@@ -81,11 +81,16 @@
 - 이벤트: 일정은 항상 자동 생성. ±평가는 이벤트 탭을 열 때 Finnhub 최신 뉴스로 실시간 산정.
 - 백테스트: 실행 시 실시간(/api/series).
 
-## 자동 수집 (장 마감 후 1회)
-페이지를 열면 저장된 최신 스냅샷을 즉시 불러옵니다(실시간 호출 없음). 수집은 Vercel Cron이 자동으로 합니다.
-- `/api/cron-refresh`: 전 종목 + 섹터 ETF + 지수/지표를 수집해 Upstash(KV)에 저장. 분당 8회 제한 때문에 6개씩 묶어 약 15분에 걸쳐 수집.
-- `/api/snapshot`: 저장된 값을 읽어 화면에 즉시 표시.
-- `vercel.json`의 cron 스케줄: `0 22 * * 1-5` (평일 22:00 UTC ≈ 미국 장 마감 후). 시각은 필요에 맞게 조정 가능.
-- 필요한 환경변수: `TWELVE_DATA_API_KEY`, `KV_REST_API_URL`, `KV_REST_API_TOKEN`(Upstash 연결 시 자동 주입). 선택: `CRON_SECRET`(cron 보호).
-- 최초 1회는 Cron을 기다리거나, 브라우저로 `/api/cron-refresh`를 직접 한 번 열어 수집을 시작할 수 있습니다(15분 소요).
-- Vercel Hobby(무료) 플랜의 Cron은 하루 1회까지. 종가는 하루 한 번 확정되므로 충분합니다.
+## 자동 수집 (이어받기 방식)
+무료 플랜의 함수 실행 한도(약 5분)와 Twelve Data 분당 8크레딧 제한 때문에, 한 번 호출에 약 24종목씩만 수집하고 다음 호출에서 이어받습니다(`/api/cron-refresh`). 110종목이면 5회 호출(약 25분)로 완성됩니다.
+- 한 번 호출: 안 받은 종목 중 다음 24개 + 지수·지표·이벤트 갱신 → KV 저장.
+- 거래일이 바뀌면 자동으로 새로 시작. 같은 날 전 종목을 다 받았으면 더 받지 않음.
+- 강제 재시작: `/api/cron-refresh?force=1`
+
+### 외부 스케줄러 설정 (무료, 5분 간격)
+Vercel Hobby Cron은 하루 1회뿐이라, 이어받기를 돌리려면 외부 무료 스케줄러를 씁니다.
+1. https://cron-job.org 무료 가입
+2. Create cronjob → URL에 `https://(내사이트)/api/cron-refresh` 입력
+3. 실행 주기: 매 5분 간격(또는 장 마감 후 시간대만)
+4. 저장. 5분마다 호출되어 종목이 점진적으로 다 채워집니다(완성 후엔 자동 스킵).
+- 필요한 환경변수: `TWELVE_DATA_API_KEY`, `FINNHUB_API_KEY`, `KV_REST_API_URL`, `KV_REST_API_TOKEN`(Upstash 연결 시 자동 주입).

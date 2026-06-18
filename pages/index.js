@@ -1188,7 +1188,13 @@ export default function App() {
         }
         if (j.asOf) setAsOfDate(j.asOf);
         if (j.eventBias) setEventBias(j.eventBias);
-        if (j.updatedAt) { setLastUpdated(new Date(j.updatedAt)); setLiveMsg(`자동 수집분 로드됨 · 종목 ${j.stockCount || Object.keys(j.stocks || {}).length}개 · 기준 ${j.asOf || "최신"}`); }
+        if (j.updatedAt) {
+          setLastUpdated(new Date(j.updatedAt));
+          const cnt = j.stockCount || Object.keys(j.stocks || {}).length;
+          setLiveMsg(j.complete === false
+            ? `자동 수집 진행 중 · ${cnt}/110 종목 (나머지는 순차 수집됨) · 기준 ${j.asOf || "최신"}`
+            : `자동 수집분 로드됨 · 종목 ${cnt}개 · 기준 ${j.asOf || "최신"}`);
+        }
       } catch (e) { /* 스냅샷 없으면 예시 데이터로 시작 */ }
     })();
   }, []);
