@@ -14,6 +14,53 @@ const SPX_EXTRA = ["JPM","V","MA","UNH","HD","PG","JNJ","XOM","BAC"];
 const SECTOR_ETFS = ["SOXX","XLK","IGV","XLV","XLY"];
 const ALL = [...new Set([...NDX_TICKERS, ...SPX_EXTRA, ...SECTOR_ETFS])];
 
+// 이벤트 키워드(영문) — 생성되는 이벤트 이름과 매칭
+const EVENT_KEYWORDS = {
+  "FOMC": ["fed", "fomc", "powell", "rate decision", "interest rate", "federal reserve"],
+  "CPI": ["cpi", "inflation", "consumer price"],
+  "PPI": ["ppi", "producer price"],
+  "고용보고서": ["jobs report", "nonfarm", "payrolls", "unemployment rate", "labor market"],
+  "PCE": ["pce", "core inflation", "personal consumption"],
+  "소매판매": ["retail sales", "consumer spending"],
+  "실업수당": ["jobless claims", "unemployment claims", "initial claims"],
+  "옵션 만기": ["options expiration", "triple witching"],
+};
+// 감성 사전(시장 맥락) — 긍/부정 단어
+const POS_WORDS = ["beat", "beats", "surge", "rally", "gain", "gains", "rise", "rises", "jump", "strong", "growth", "optimism", "upbeat", "cooling", "cools", "ease", "eases", "dovish", "soft landing", "boost", "record high", "outperform", "upgrade"];
+const NEG_WORDS = ["miss", "misses", "fall", "falls", "drop", "drops", "plunge", "slump", "weak", "fear", "fears", "concern", "selloff", "sell-off", "hot", "hotter", "hawkish", "recession", "downgrade", "cut", "layoff", "slowdown", "tumble", "warn", "warns"];
+
+// 뉴스 배열에서 특정 이벤트 키워드에 맞는 기사들의 ±판정
+function biasForEvent(eventName, news) {
+  const keys = Object.keys(EVENT_KEYWORDS).find((k) => eventName.includes(k));
+  if (!keys) return { bias: "neutral", why: "관련 키워드 없음 — 중립 처리", n: 0 };
+  const kws = EVENT_KEYWORDS[keys];
+  const matched = news.filter((a) => {
+    const t = ((a.headline || "") + " " + (a.summary || "")).toLowerCase();
+    return kws.some((kw) => t.includes(kw));
+  });
+  if (!matched.length) return { bias: "neutral", why: "최근 관련 뉴스 없음 — 중립", n: 0 };
+  let pos = 0, neg = 0;
+  matched.forEach((a) => {
+    const t = ((a.headline || "") + " " + (a.summary || "")).toLowerCase();
+    POS_WORDS.forEach((w) => { if (t.includes(w)) pos++; });
+    NEG_WORDS.forEach((w) => { if (t.includes(w)) neg++; });
+  });
+  let bias = "neutral";
+  if (pos > neg * 1.3) bias = "plus";
+  else if (neg > pos * 1.3) bias = "minus";
+  const why = `최근 뉴스 ${matched.length}건 분석(긍정 ${pos}·부정 ${neg}) → ${bias === "plus" ? "우호적" : bias === "minus" ? "부정적" : "중립적"} 신호`;
+  return { bias, why, n: matched.length };
+}
+
+async function fetchNews(finnhubKey) {
+  if (!finnhubKey) return [];
+  try {
+    const r = await fetch(`https://finnhub.io/api/v1/news?category=general&token=${finnhubKey}`);
+    const j = await r.json();
+    return Array.isArray(j) ? j : [];
+  } catch (e) { return []; }
+}
+
 const BASE = "https://api.twelvedata.com";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
@@ -75,6 +122,24 @@ export default async function handler(req, res) {
   const key = process.env.TWELVE_DATA_API_KEY;
   if (!key) return res.status(500).json({ error: "TWELVE_DATA_API_KEY 미설정" });
 
+  // 중복 수집 방지: 이미 같은 거래일(asOf) 데이터가 저장돼 있으면 스킵.
+  // 강제 재수집은 ?force=1 로 호출.
+  const force = req.query && (req.query.force === "1" || req.query.force === "true");
+  if (!force) {
+    try {
+      const existing = await redis.get("snapshot:latest");
+      if (existing) {
+        const prev = typeof existing === "string" ? JSON.parse(existing) : existing;
+        // 최신 거래일 확인(QQQ 1회) — 저장된 asOf와 같으면 스킵
+        const probe = await timeSeries("QQQ", key, 2);
+        const latestDay = probe && probe[0] ? probe[0].datetime : null;
+        if (latestDay && prev.asOf === latestDay) {
+          return res.status(200).json({ ok: true, skipped: true, reason: "이미 최신 거래일 수집됨", asOf: prev.asOf });
+        }
+      }
+    } catch (e) { /* 확인 실패 시 그냥 수집 진행 */ }
+  }
+
   try {
     // 1) 지수(QQQ) 먼저 — C7 기준 + 지수 카드용
     const qqq = await timeSeries("QQQ", key, 280);
@@ -104,18 +169,27 @@ export default async function handler(req, res) {
       if (i + 6 < ALL.length) await sleep(62000);   // 다음 배치까지 62초 대기
     }
 
-    // 3) 지수/확인지표 (QQQ=NDX 프록시, SPY=SPX 프록시, VIXY, HYG)
+    // 3) 지수/확인지표
     const macro = await buildMacro(key, idxRef);
+
+    // 4) 이벤트 ±평가: Finnhub 뉴스로 이벤트 타입별 감성 판정
+    const finnhubKey = process.env.FINNHUB_API_KEY;
+    const news = await fetchNews(finnhubKey);
+    const eventBias = {};
+    Object.keys(EVENT_KEYWORDS).forEach((type) => {
+      eventBias[type] = biasForEvent(type, news);
+    });
 
     const snapshot = {
       updatedAt: new Date().toISOString(),
       asOf: idxRef ? (qqq[0] ? qqq[0].datetime : null) : null,
       stockCount: ok, failCount: fail,
       stocks, macro,
+      eventBias, newsCount: news.length,
     };
     await redis.set("snapshot:latest", JSON.stringify(snapshot));
 
-    res.status(200).json({ ok: true, stored: ok, failed: fail, asOf: snapshot.asOf });
+    res.status(200).json({ ok: true, stored: ok, failed: fail, asOf: snapshot.asOf, news: news.length });
   } catch (e) {
     res.status(500).json({ error: "수집 오류: " + (e.message || String(e)) });
   }

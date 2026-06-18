@@ -1057,7 +1057,18 @@ export default function App() {
   const [btError, setBtError] = useState("");
   // 오늘 기준 30일 이벤트 자동 생성 (아티팩트는 고정 날짜, 배포판은 실제 오늘)
   const todayISO = new Date().toISOString().slice(0, 10);   // 배포판: 실제 오늘
-  const events = useMemo(() => generateEvents(todayISO, 30), [todayISO]);
+  const events = useMemo(() => {
+    const base = generateEvents(todayISO, 30);
+    if (!eventBias) return base;
+    // 이벤트 이름에 포함된 타입 키로 ±평가 매칭
+    return base.map((e) => {
+      const type = Object.keys(eventBias).find((k) => e.ev.includes(k));
+      if (type && eventBias[type]) {
+        return { ...e, bias: eventBias[type].bias, why: eventBias[type].why };
+      }
+      return e;
+    });
+  }, [todayISO, eventBias]);
   // 실시간 갱신 상태
   const [live, setLive] = useState({});
   const [loading, setLoading] = useState(false);
@@ -1069,6 +1080,25 @@ export default function App() {
   const [sectorLive, setSectorLive] = useState(null);   // 섹터 ETF C1~C7 평가
   const [sectorLoading, setSectorLoading] = useState(false);
   const [sectorMsg, setSectorMsg] = useState("");
+  const [eventBias, setEventBias] = useState(null);   // 이벤트 타입별 ±평가
+  const [eventBiasLoading, setEventBiasLoading] = useState(false);
+  const [eventBiasAt, setEventBiasAt] = useState(null);
+
+  // 이벤트 탭을 열면 최신 뉴스로 ±평가 실시간 조회
+  useEffect(() => {
+    if (tab !== "calendar") return;
+    let cancelled = false;
+    (async () => {
+      setEventBiasLoading(true);
+      try {
+        const r = await fetch("/api/event-bias");
+        const j = await r.json();
+        if (!cancelled && j.ok && j.eventBias) { setEventBias(j.eventBias); setEventBiasAt(j.at || new Date().toISOString()); }
+      } catch (e) { /* 실패 시 평가 없이 일정만 표시 */ }
+      finally { if (!cancelled) setEventBiasLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [tab]);(스냅샷)
 
   // 섹터 대표 ETF를 C1~C7로 평가 (Twelve Data, 섹터당 1회 = 5회)
   async function refreshSectors() {
@@ -1111,10 +1141,10 @@ export default function App() {
   const conf = useMemo(() => calcConfirm(confData), [confData]);
   const ndx = calcIndex(idxData.NDX), spx = calcIndex(idxData.SPX);
 
-  async function refreshLive(symbols) {
+  async function refreshLive() {
     setLoading(true);
-    setLiveMsg("최신 데이터를 불러오는 중… (지수·지표·종목)");
-    let stockOk = 0, idxNote = "";
+    setLiveMsg("지수·확인지표를 최신으로 불러오는 중…");
+    let idxNote = "";
     try {
       const mResp = await fetch("/api/macro");
       const mJson = await mResp.json();
@@ -1126,32 +1156,13 @@ export default function App() {
           idxNote = ndxOk ? (mJson.idx.NDX.isProxy ? `지수=ETF프록시(${mJson.idx.NDX.source})` : "지수=실시간") : "지수=갱신실패";
         }
         if (mJson.confirm && Object.keys(mJson.confirm).length) setLiveConf(mJson.confirm);
-      } else idxNote = "지수=API오류";
-    } catch (e) { idxNote = "지수=네트워크오류"; }
-    // 매크로(지수·지표)에서 이미 여러 호출을 썼으므로, 종목 호출 전 잠시 대기
-    setLiveMsg("지수·지표 갱신 완료 · 종목 데이터 준비 중 (API 한도 보호 대기)…");
-    await new Promise((r) => setTimeout(r, 15000));
-    try {
-      const merged = { ...live };
-      const BATCH = 6;                       // QQQ(1)+6종목=7 → 분당 8회 한도 이내
-      const batches = Math.ceil(symbols.length / BATCH);
-      for (let i = 0; i < symbols.length; i += BATCH) {
-        const batch = symbols.slice(i, i + BATCH);
-        const resp = await fetch(`/api/quote?symbols=${encodeURIComponent(batch.join(","))}`);
-        const json = await resp.json();
-        if (resp.ok && json.data) Object.entries(json.data).forEach(([sym, d]) => { if (!d.error) { merged[sym] = d; stockOk++; } });
-        setLive({ ...merged });
-        setLiveMsg(`갱신 중… 종목 ${stockOk}개 완료`);
-        // 다음 배치가 남았으면 분당 호출 제한(8회/분)을 피하려 잠시 대기
-        if (i + BATCH < symbols.length) {
-          setLiveMsg(`갱신 중… 종목 ${stockOk}개 · API 한도 보호로 60초 대기 (남은 배치 ${batches - (i / BATCH + 1)}개)`);
-          await new Promise((r) => setTimeout(r, 60000));
-        }
+        setLiveMsg(`지수·확인지표 갱신 완료 · ${idxNote} · ${new Date().toLocaleTimeString("ko-KR")}`);
+        setLastUpdated(new Date());
+      } else {
+        setLiveMsg("갱신 실패: " + (mJson.error || "API 오류"));
       }
-      setLiveMsg(`갱신 완료 · 종목 ${stockOk}개 · ${idxNote || "지수=미확인"} · ${new Date().toLocaleTimeString("ko-KR")}`);
-      setLastUpdated(new Date());
     } catch (e) {
-      setLiveMsg("갱신 실패: " + e.message + " — API 키/한도를 확인하세요.");
+      setLiveMsg("갱신 실패: " + e.message);
     } finally { setLoading(false); }
   }
 
@@ -1176,6 +1187,7 @@ export default function App() {
           if (j.macro.confirm && Object.keys(j.macro.confirm).length) setLiveConf(j.macro.confirm);
         }
         if (j.asOf) setAsOfDate(j.asOf);
+        if (j.eventBias) setEventBias(j.eventBias);
         if (j.updatedAt) { setLastUpdated(new Date(j.updatedAt)); setLiveMsg(`자동 수집분 로드됨 · 종목 ${j.stockCount || Object.keys(j.stocks || {}).length}개 · 기준 ${j.asOf || "최신"}`); }
       } catch (e) { /* 스냅샷 없으면 예시 데이터로 시작 */ }
     })();
@@ -1280,18 +1292,15 @@ export default function App() {
             <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: "-0.02em" }}>시장 추세 분석 대시보드</h1>
           </div>
           <button
-            onClick={() => {
-              const targets = ranked.slice(0, 12).map((s) => s.t);
-              refreshLive(targets.length ? targets : ["NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "AVGO", "COST"]);
-            }}
+            onClick={() => refreshLive()}
             disabled={loading}
-            title="실제 API로 최신 데이터 갱신"
+            title="지수·확인지표를 최신으로 갱신"
             style={{
               display: "flex", alignItems: "center", gap: 6, padding: "9px 13px", borderRadius: 10, cursor: loading ? "wait" : "pointer",
               background: loading ? C.line : C.brass, color: loading ? C.sub : C.bg, border: "none", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap",
             }}
           >
-            <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> {loading ? "갱신 중…" : "실데이터 갱신"}
+            <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> {loading ? "갱신 중…" : "지수·지표 갱신"}
           </button>
         </div>
         <div style={{ fontSize: 12, color: C.dim, marginBottom: 6 }}>
@@ -1302,7 +1311,7 @@ export default function App() {
         <div style={{ fontSize: 10.5, color: liveMsg.includes("실패") ? C.down : C.dim, marginBottom: 18, lineHeight: 1.5, padding: "8px 11px", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           {liveMsg
             ? <>↻ {liveMsg}</>
-            : <>↻ <b style={{ color: C.sub }}>실데이터 갱신</b>: 지수(NDX·SPX)·확인지표(VIX·HYG·12M ROC)·상위 12개 종목의 실제 시세로 C1~C7을 다시 계산합니다. 무료 플랜의 분당 호출 제한(8회/분) 때문에 종목은 6개씩 나눠 받으며, 배치 사이 약 60초 대기합니다(완료까지 1~2분).</>}
+            : <>↻ <b style={{ color: C.sub }}>지수·지표 갱신</b>: 지수(NDX·SPX)와 확인지표(VIX·HYG·12M ROC)를 실시간으로 다시 불러옵니다(4~6회 호출, 수초). 종목·섹터·베이스스캔은 장 마감 후 자동 수집분을 쓰며, 종목은 종합 탭에서 검색 시 개별 실시간 조회됩니다.</>}
         </div>
         <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
@@ -1579,7 +1588,8 @@ export default function App() {
           <>
             <SectionTitle icon={Calendar} sub="오늘부터 30일 · 정기 이벤트 자동 생성 · 오름차순">매크로 캘린더 & 리스크</SectionTitle>
             <div style={{ fontSize: 10.5, color: C.dim, margin: "0 2px 12px", lineHeight: 1.5 }}>
-              일정은 FOMC·CPI·고용보고서 등 정기 이벤트를 오늘 기준으로 자동 계산합니다. 각 이벤트의 ±평가는 '실데이터 갱신' 시 최신 뉴스 기반으로 채워집니다.
+              일정은 FOMC·CPI·고용보고서 등 정기 이벤트를 오늘 기준으로 자동 계산합니다. 각 이벤트의 ±평가는 탭을 열 때 최신 시장 뉴스의 긍정·부정 키워드 비율로 실시간 산정합니다(키워드 기반 추정, 참고용).
+              {eventBiasLoading ? " · 평가 조회 중…" : eventBiasAt ? ` · 평가 기준 ${new Date(eventBiasAt).toLocaleTimeString("ko-KR")}` : ""}
             </div>
             {events.map((e, i) => {
               const bc = e.bias === "plus" ? C.up : e.bias === "minus" ? C.down : C.sub;
@@ -1603,10 +1613,10 @@ export default function App() {
             })}
             <Card style={{ background: `${C.down}10`, borderColor: `${C.down}33` }}>
               <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                <AlertTriangle size={15} color={C.down} /><b style={{ fontSize: 13, color: C.down }}>핵심 리스크</b>
+                <AlertTriangle size={15} color={C.down} /><b style={{ fontSize: 13, color: C.down }}>이벤트 활용법</b>
               </div>
               <div style={{ fontSize: 12.5, color: C.sub, marginTop: 6, lineHeight: 1.8 }}>
-                6/17 FOMC는 동결이 거의 확실하나, 신임 Warsh 의장의 첫 회의로 <b style={{ color: C.text }}>점도표(dot plot)와 기자회견 톤</b>이 방향키입니다. 매파적이면 성장주 단기 조정 가능 — 신규 레버리지보다 현 포지션 유지 권고.
+                일정은 매일 자동 갱신되며, ±평가는 최신 시장 뉴스의 긍정·부정 키워드 비율로 산정합니다(키워드 기반 추정이라 참고용). <b style={{ color: C.text }}>영향 '매우 높음'</b> 이벤트(FOMC·CPI·고용보고서) 전후로는 변동성이 커지니, 해당 일정 5일 내 신규 진입은 신중히 하세요.
               </div>
             </Card>
           </>
