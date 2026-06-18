@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   TrendingUp, Activity, Layers, Calendar, Search, ShieldCheck,
   AlertTriangle, ChevronDown, ChevronUp, ChevronRight, Gauge, ArrowUpRight, ArrowDownRight, Minus, Target,
@@ -1155,6 +1155,32 @@ export default function App() {
     } finally { setLoading(false); }
   }
 
+  // 페이지 진입 시 저장된 스냅샷(Cron 수집분)을 즉시 불러와 모든 탭에 반영
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch("/api/snapshot");
+        const j = await r.json();
+        if (!j.ok || j.empty) return;
+        if (j.stocks) {
+          setLive(j.stocks);
+          // 섹터 ETF도 같은 스냅샷에서 구성
+          const sec = {};
+          SECTOR_ETFS.forEach(({ sector, etf, color }) => {
+            if (j.stocks[etf]) sec[sector] = { sector, etf, color, ...j.stocks[etf] };
+          });
+          if (Object.keys(sec).length) setSectorLive(sec);
+        }
+        if (j.macro) {
+          if (j.macro.idx) setLiveIdx(j.macro.idx);
+          if (j.macro.confirm && Object.keys(j.macro.confirm).length) setLiveConf(j.macro.confirm);
+        }
+        if (j.asOf) setAsOfDate(j.asOf);
+        if (j.updatedAt) { setLastUpdated(new Date(j.updatedAt)); setLiveMsg(`자동 수집분 로드됨 · 종목 ${j.stockCount || Object.keys(j.stocks || {}).length}개 · 기준 ${j.asOf || "최신"}`); }
+      } catch (e) { /* 스냅샷 없으면 예시 데이터로 시작 */ }
+    })();
+  }, []);
+
   const allStocks = useMemo(() => {
     // 분석값(C1~C5)이 있는 종목 맵
     const analyzed = {};
@@ -1487,6 +1513,29 @@ export default function App() {
                         </div>
                       ))}
                     </div>
+                    {/* 섹터 소속 종목 (저장된 실데이터 기준, 충족률 내림차순) */}
+                    {(() => {
+                      const members = allStocks
+                        .filter((a) => a.sector === s.sector && a.analyzed && a.c)
+                        .sort((x, y) => (y.score / y.c.length) - (x.score / x.c.length));
+                      if (!members.length) return null;
+                      return (
+                        <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
+                          <div style={{ fontSize: 10.5, color: C.dim, marginBottom: 8 }}>섹터 종목 ({members.length}) · 충족률순</div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {members.map((st) => {
+                              const mg = grade(st.score, st.c.length);
+                              return (
+                                <span key={st.t} title={st.note} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 9px", borderRadius: 8, background: C.panel2, border: `1px solid ${mg.color}33`, fontSize: 11.5, fontWeight: 600 }}>
+                                  {st.live && <span style={{ width: 5, height: 5, borderRadius: 999, background: C.up }} />}
+                                  {st.t} <span style={{ color: mg.color }}>{st.score}<span style={{ color: C.dim, fontSize: 9.5 }}>/{st.c.length}</span></span>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </Card>
                 );
               })}
