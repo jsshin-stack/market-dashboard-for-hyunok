@@ -9,7 +9,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 /* ── 설계 토큰: 트레이딩 터미널의 차분한 정밀함 ───────────────── */
 const C = {
   bg: "#0E1420", panel: "#161E2D", panel2: "#1D2738", line: "#2A3548",
-  text: "#E8EDF4", sub: "#8B97A8", dim: "#5C6878",
+  text: "#F2F5FA", sub: "#A6B0BE", dim: "#7A8494",
   up: "#3DD68C", down: "#F2607D", brass: "#E0A93C", amber: "#E0A93C",
   blue: "#5B9BF0", violet: "#9B8CF0",
 };
@@ -950,14 +950,14 @@ function StockSignalCard({ st, idxStates, conf }) {
   return (
     <Card style={{ borderColor: `${g.color}44` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-        <div>
+        <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 12, color: st.color }}>{st.sector}</div>
-          <div style={{ fontSize: 19, fontWeight: 800, color: C.text, display: "flex", alignItems: "center", gap: 7 }}>
-            {st.t}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 19, fontWeight: 800, color: C.text }}>{st.t}</span>
+            {st.name && <span style={{ fontSize: 12, color: C.sub }}>{st.name}</span>}
             {st.imminent ? <span style={{ fontSize: 9.5, fontWeight: 700, color: C.amber, background: `${C.amber}22`, border: `1px solid ${C.amber}66`, padding: "2px 7px", borderRadius: 999 }}>⚡ 돌파 임박</span> : null}
           </div>
-          {st.name && <div style={{ fontSize: 11.5, color: C.sub, marginTop: 1 }}>{st.name}</div>}
-          <div style={{ display: "flex", gap: 10, marginTop: 5, fontSize: 11, color: C.sub, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 14, marginTop: 5, fontSize: 11.5, color: C.sub, flexWrap: "wrap" }}>
             {st.close != null && <span>현재가 <b style={{ color: C.text }}>${st.close.toLocaleString()}</b></span>}
             {st.per != null && <span>PER <b style={{ color: C.text }}>{st.per}</b></span>}
             {st.pbr != null && <span>PBR <b style={{ color: C.text }}>{st.pbr}</b></span>}
