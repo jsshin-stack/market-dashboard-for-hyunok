@@ -1144,21 +1144,28 @@ export default function App() {
   }, [todayISO, eventBias]);
 
   const [newsMood, setNewsMood] = useState(null);
-  // 이벤트 탭을 열면 FRED 경제지표로 ±평가 + 뉴스 분위기 조회
+  const [ffEvents, setFfEvents] = useState(null);   // ForexFactory 실제 일정+평가
+  // 이벤트 탭을 열면 ForexFactory 실제 일정 + FRED 보조평가 + 뉴스 분위기 조회
   useEffect(() => {
     if (tab !== "calendar") return;
     let cancelled = false;
     (async () => {
       setEventBiasLoading(true);
+      // ForexFactory 실제 일정(예상/실제/이전 + ±)
+      try {
+        const rf = await fetch("/api/ff-events");
+        const jf = await rf.json();
+        if (!cancelled && jf.ok && jf.events) { setFfEvents(jf.events); setEventBiasAt(jf.at || new Date().toISOString()); }
+      } catch (e) { /* FF 실패 시 자동생성 일정으로 폴백 */ }
+      // FRED 보조평가 + 뉴스 분위기
       try {
         const r = await fetch("/api/econ-bias");
         const j = await r.json();
-        if (!cancelled && j.ok && j.eventBias) {
-          setEventBias(j.eventBias);
-          setEventBiasAt(j.at || new Date().toISOString());
+        if (!cancelled && j.ok) {
+          if (j.eventBias) setEventBias(j.eventBias);
           if (j.newsMood) setNewsMood(j.newsMood);
         }
-      } catch (e) { /* 실패 시 평가 없이 일정만 표시 */ }
+      } catch (e) { /* 보조 */ }
       finally { if (!cancelled) setEventBiasLoading(false); }
     })();
     return () => { cancelled = true; };
@@ -1747,8 +1754,8 @@ export default function App() {
           <>
             <SectionTitle icon={Calendar} sub="오늘부터 30일 · 정기 이벤트 자동 생성 · 오름차순">매크로 캘린더 & 리스크</SectionTitle>
             <div style={{ fontSize: 10.5, color: C.dim, margin: "0 2px 12px", lineHeight: 1.5 }}>
-              일정은 FOMC·CPI·고용보고서 등 정기 이벤트를 오늘 기준으로 자동 계산합니다. 각 이벤트의 ±평가는 FRED(미 연준) 최신 발표치의 직전 대비 방향으로 산정합니다(예: CPI 상승률 하락 → 긍정).
-              {eventBiasLoading ? " · 평가 조회 중…" : eventBiasAt ? ` · 평가 기준 ${new Date(eventBiasAt).toLocaleTimeString("ko-KR")}` : ""}
+              일정·예상치·실제치는 ForexFactory(Fair Economy) 이번 주 미국 경제 캘린더 기준입니다. 발표 완료 시 예상 vs 실제(서프라이즈), 발표 전이면 예상 vs 이전(예상 방향)으로 ±를 판정합니다. 영향도 High/Medium 위주로 표시.
+              {eventBiasLoading ? " · 조회 중…" : eventBiasAt ? ` · 기준 ${new Date(eventBiasAt).toLocaleTimeString("ko-KR")}` : ""}
             </div>
             {newsMood && (
               <Card style={{ marginBottom: 12, background: C.panel2 }}>
@@ -1758,7 +1765,41 @@ export default function App() {
                 </div>
               </Card>
             )}
-            {events.map((e, i) => {
+            {ffEvents ? (() => {
+              const impLabel = { High: "매우 높음", Medium: "보통", Low: "낮음", Holiday: "휴장" };
+              const fmtDate = (iso) => {
+                try { const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`; }
+                catch (e) { return iso; }
+              };
+              // Low 영향은 너무 많으니 High/Medium 우선 노출(나머지는 접어둠)
+              const shown = ffEvents.filter((e) => e.impact === "High" || e.impact === "Medium");
+              const list = shown.length ? shown : ffEvents;
+              return list.map((e, i) => {
+                const bc = e.bias === "plus" ? C.up : e.bias === "minus" ? C.down : C.sub;
+                const bl = e.bias === "plus" ? "플러스 요인" : e.bias === "minus" ? "마이너스 요인" : "중립";
+                const ic = e.impact === "High" ? C.down : e.impact === "Medium" ? C.amber : C.dim;
+                return (
+                  <Card key={i} style={{ marginBottom: 8, borderLeft: `3px solid ${bc}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 11, color: C.dim }}>{fmtDate(e.date)}</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, marginTop: 1 }}>{e.title}</div>
+                        <div style={{ fontSize: 12, color: C.sub, marginTop: 4, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                          {e.previous != null && <span>이전 <b style={{ color: C.text }}>{e.previous}</b></span>}
+                          {e.forecast != null && <span>예상 <b style={{ color: C.text }}>{e.forecast}</b></span>}
+                          {e.actual != null && <span>실제 <b style={{ color: bc }}>{e.actual}</b></span>}
+                        </div>
+                        {e.why && <div style={{ fontSize: 11.5, color: C.dim, marginTop: 6, lineHeight: 1.6 }}>{e.label} · {e.why}</div>}
+                      </div>
+                      <div style={{ textAlign: "right", flexShrink: 0 }}>
+                        <span style={{ padding: "3px 9px", borderRadius: 999, background: `${bc}22`, color: bc, fontSize: 11, fontWeight: 700 }}>{bl}</span>
+                        <div style={{ fontSize: 10.5, color: ic, marginTop: 6 }}>영향 {impLabel[e.impact] || e.impact}</div>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              });
+            })() : events.map((e, i) => {
               const bc = e.bias === "plus" ? C.up : e.bias === "minus" ? C.down : C.sub;
               const bl = e.bias === "plus" ? "플러스 요인" : e.bias === "minus" ? "마이너스 요인" : "중립";
               return (
@@ -1783,7 +1824,7 @@ export default function App() {
                 <AlertTriangle size={15} color={C.down} /><b style={{ fontSize: 13, color: C.down }}>이벤트 활용법</b>
               </div>
               <div style={{ fontSize: 12.5, color: C.sub, marginTop: 6, lineHeight: 1.8 }}>
-                일정은 매일 자동 갱신되며, ±평가는 최신 시장 뉴스의 긍정·부정 키워드 비율로 산정합니다(키워드 기반 추정이라 참고용). <b style={{ color: C.text }}>영향 '매우 높음'</b> 이벤트(FOMC·CPI·고용보고서) 전후로는 변동성이 커지니, 해당 일정 5일 내 신규 진입은 신중히 하세요.
+                일정·수치는 ForexFactory 기준으로 시간당 갱신됩니다. 발표 전 이벤트는 '예상 vs 이전'으로 방향만 참고하고, 발표 후 실제치가 나오면 서프라이즈(예상 대비)로 ±가 확정됩니다. <b style={{ color: C.text }}>영향 '매우 높음'</b>(CPI·고용·FOMC 등) 전후로는 변동성이 커지니 신규 진입에 유의하세요.
               </div>
             </Card>
           </>
