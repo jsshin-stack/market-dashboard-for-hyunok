@@ -1143,16 +1143,21 @@ export default function App() {
     });
   }, [todayISO, eventBias]);
 
-  // 이벤트 탭을 열면 최신 뉴스로 ±평가 실시간 조회
+  const [newsMood, setNewsMood] = useState(null);
+  // 이벤트 탭을 열면 FRED 경제지표로 ±평가 + 뉴스 분위기 조회
   useEffect(() => {
     if (tab !== "calendar") return;
     let cancelled = false;
     (async () => {
       setEventBiasLoading(true);
       try {
-        const r = await fetch("/api/event-bias");
+        const r = await fetch("/api/econ-bias");
         const j = await r.json();
-        if (!cancelled && j.ok && j.eventBias) { setEventBias(j.eventBias); setEventBiasAt(j.at || new Date().toISOString()); }
+        if (!cancelled && j.ok && j.eventBias) {
+          setEventBias(j.eventBias);
+          setEventBiasAt(j.at || new Date().toISOString());
+          if (j.newsMood) setNewsMood(j.newsMood);
+        }
       } catch (e) { /* 실패 시 평가 없이 일정만 표시 */ }
       finally { if (!cancelled) setEventBiasLoading(false); }
     })();
@@ -1742,9 +1747,17 @@ export default function App() {
           <>
             <SectionTitle icon={Calendar} sub="오늘부터 30일 · 정기 이벤트 자동 생성 · 오름차순">매크로 캘린더 & 리스크</SectionTitle>
             <div style={{ fontSize: 10.5, color: C.dim, margin: "0 2px 12px", lineHeight: 1.5 }}>
-              일정은 FOMC·CPI·고용보고서 등 정기 이벤트를 오늘 기준으로 자동 계산합니다. 각 이벤트의 ±평가는 탭을 열 때 최신 시장 뉴스의 긍정·부정 키워드 비율로 실시간 산정합니다(키워드 기반 추정, 참고용).
+              일정은 FOMC·CPI·고용보고서 등 정기 이벤트를 오늘 기준으로 자동 계산합니다. 각 이벤트의 ±평가는 FRED(미 연준) 최신 발표치의 직전 대비 방향으로 산정합니다(예: CPI 상승률 하락 → 긍정).
               {eventBiasLoading ? " · 평가 조회 중…" : eventBiasAt ? ` · 평가 기준 ${new Date(eventBiasAt).toLocaleTimeString("ko-KR")}` : ""}
             </div>
+            {newsMood && (
+              <Card style={{ marginBottom: 12, background: C.panel2 }}>
+                <div style={{ fontSize: 12, color: C.sub }}>
+                  최근 3일 시장 뉴스 분위기: <b style={{ color: newsMood.mood === "우호적" ? C.up : newsMood.mood === "신중" ? C.down : C.sub }}>{newsMood.mood}</b>
+                  <span style={{ fontSize: 10.5, color: C.dim }}> (긍정 {newsMood.pos}·부정 {newsMood.neg} 신호, 기사 {newsMood.n}건) · 보조 참고용</span>
+                </div>
+              </Card>
+            )}
             {events.map((e, i) => {
               const bc = e.bias === "plus" ? C.up : e.bias === "minus" ? C.down : C.sub;
               const bl = e.bias === "plus" ? "플러스 요인" : e.bias === "minus" ? "마이너스 요인" : "중립";
