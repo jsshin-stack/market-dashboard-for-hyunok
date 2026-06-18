@@ -660,49 +660,86 @@ function sma(series, idx, win) {
    C7 지수환경: 지수가 50일선 위 + 종목 상대강도(20일) 우위 (idxSeries 필요)
    데이터(거래량/지수)가 없으면 해당 항목은 0으로 처리한다.
    반환: { c: [c1..c7], score, detail } */
+// 백테스트 점수 파라미터 (하락/횡보장 검증 기반 튜닝값). 한곳에 모아 조정 쉽게.
+const BT_PARAMS = {
+  c1strict: false,   // C1: false=종가>MA200 & MA50>MA200(완화), true=완전정배열
+  c2atr: 3,          // C2: 30일고점 - c2atr×ATR 이내
+  c4k: 4,            // C4: 최근10일 변동폭 ≤ c4k×ATR
+  c6burst: 1.3,      // C6: 돌파 거래량 ≥ c6burst×20일평균
+  c6dry: 0.7,        // C6: 직전3일 거래량 < c6dry×50일평균
+  entry: 2,          // 진입: C점수 ≥ entry
+  exit: 0,           // 청산: C점수 ≤ exit
+  stop: -8,          // 손절 %
+  trail: -10,        // 추적손절 %
+  take: 25,          // 익절 %
+};
+
+function btATR(series, idx, n = 14) {
+  if (idx < n) return null;
+  let t = 0, c = 0;
+  for (let k = idx - n + 1; k <= idx; k++) {
+    const h = series[k].high, l = series[k].low, pc = series[k - 1].close;
+    if ([h, l, pc].some((x) => x == null || isNaN(x))) continue;
+    t += Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)); c++;
+  }
+  return c ? t / c : null;
+}
+
+// 백테스트용 C1~C6 점수 (OHLCV 필요). C7은 백테스트에서 지수환경으로 별도 처리.
 function scoreAt(series, idx, idxSeries) {
+  const P = BT_PARAMS;
   const close = series[idx].close;
   const lo = (n) => Math.max(0, idx - n + 1);
   const win = (n) => series.slice(lo(n), idx + 1);
-  const closes = win(200).map((d) => d.close);
-  const ma200 = closes.length ? closes.reduce((a, b) => a + b, 0) / closes.length : null;
-  const c20 = win(20).map((d) => d.close);
-  const ma20 = c20.length ? c20.reduce((a, b) => a + b, 0) / c20.length : null;
-  const high52 = Math.max(...win(252).map((d) => d.close));
-  const high30 = Math.max(...win(30).map((d) => d.close));
+  const maOf = (n) => { const a = win(n).map((d) => d.close); return a.length ? a.reduce((x, y) => x + y, 0) / a.length : null; };
+  const hasOHLC = series[idx].high != null && series[idx].low != null;
+  const ma50 = maOf(50), ma150 = maOf(150), ma200 = maOf(200);
+  const ma200_20 = idx >= 220 ? (() => { const a = series.slice(idx - 219, idx - 19).map((d) => d.close); return a.reduce((x, y) => x + y, 0) / a.length; })() : ma200;
+  const atr = hasOHLC ? btATR(series, idx, 14) : null;
+  const highs = win(252).map((d) => (d.high != null ? d.high : d.close));
+  const high52 = Math.max(...highs);
+  const high30 = Math.max(...win(30).map((d) => (d.high != null ? d.high : d.close)));
+  const high30prev = idx > 0 ? Math.max(...series.slice(lo(31), idx).map((d) => (d.high != null ? d.high : d.close))) : high30;
   const pull = high52 ? ((close - high52) / high52) * 100 : 0;
-  const fromMA20 = ma20 ? ((close - ma20) / ma20) * 100 : 0;
 
-  const c1 = ma200 != null && close > ma200 ? 1 : 0;
-  const c2 = pull <= -5 && pull >= -18 ? 1 : 0;
-  const c3 = c1 && pull <= -3 && pull >= -15 ? 1 : 0;
-  const c4 = Math.abs(fromMA20) <= 4 ? 1 : 0;
-  const c5 = close >= high30 * 0.98 ? 1 : 0;
-
-  // C6 거래량 돌파: 당일 거래량 ≥ 20일 평균 × 1.5
-  let c6 = 0;
-  const vols = win(21).map((d) => d.volume).filter((v) => v != null && !isNaN(v));
-  if (vols.length >= 6) {
-    const today = series[idx].volume;
-    const past = vols.slice(0, -1);                       // 당일 제외 과거
-    const avgVol = past.reduce((a, b) => a + b, 0) / past.length;
-    if (today != null && avgVol > 0 && today >= avgVol * 1.5) c6 = 1;
+  // C1 추세
+  const c1 = P.c1strict
+    ? (ma50 != null && ma150 != null && ma200 != null && close > ma50 && ma50 > ma150 && ma150 > ma200 && ma200 > ma200_20 ? 1 : 0)
+    : (ma200 != null && close > ma200 && (ma50 == null || ma50 > ma200) ? 1 : 0);
+  // C2 ATR 풀백 하한선 (ATR 없으면 % 폴백 -5~-18)
+  const c2 = atr != null ? (close >= high30 - P.c2atr * atr ? 1 : 0) : (pull <= -5 && pull >= -18 ? 1 : 0);
+  // C3 베이스
+  const c3 = (ma200 != null && close > ma200 && pull <= -2 && pull >= -18) ? 1 : 0;
+  // C4 변동성 수축 (ATR 없으면 0)
+  let c4 = 0;
+  if (atr != null) {
+    const w10 = win(10);
+    const range10 = Math.max(...w10.map((d) => (d.high != null ? d.high : d.close))) - Math.min(...w10.map((d) => (d.low != null ? d.low : d.close)));
+    c4 = range10 <= P.c4k * atr ? 1 : 0;
   }
-
-  // C7 지수 환경: 지수 50일선 위 AND 종목 20일 수익률 > 지수 20일 수익률
+  // C5 돌파
+  const c5 = close >= high30prev ? 1 : 0;
+  // C6 거래량 폭발 + 직전 고갈 (거래량 없으면 0)
+  let c6 = 0;
+  const vols = win(51).map((d) => d.volume).filter((v) => v != null && !isNaN(v));
+  if (vols.length >= 51) {
+    const today = vols[vols.length - 1];
+    const ma20v = vols.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
+    const ma50v = vols.slice(-51, -1).reduce((a, b) => a + b, 0) / 50;
+    const prev3 = vols.slice(-4, -1).reduce((a, b) => a + b, 0) / 3;
+    if (ma20v > 0 && today >= P.c6burst * ma20v && prev3 < P.c6dry * ma50v) c6 = 1;
+  }
+  // C7 지수환경 (지수 50일선 위 + 상대강도)
   let c7 = 0;
   if (idxSeries && idxSeries.length) {
-    // 같은 인덱스 위치를 날짜로 맞추기 어려우니, 동일 길이 가정 하에 idx 사용 (백테스트는 동일 기간)
     const j = Math.min(idx, idxSeries.length - 1);
     const ic = idxSeries[j].close;
     const iwin = idxSeries.slice(Math.max(0, j - 49), j + 1).map((d) => d.close);
     const ima50 = iwin.length ? iwin.reduce((a, b) => a + b, 0) / iwin.length : null;
-    const idxAbove50 = ima50 != null && ic > ima50;
-    // 상대강도: 최근 20일 수익률 비교
-    const stockRet = closes.length > 20 ? (close / series[lo(20)].close - 1) : 0;
+    const stockRet = series[lo(20)] ? (close / series[lo(20)].close - 1) : 0;
     const idxAgo = idxSeries[Math.max(0, j - 19)].close;
     const idxRet = idxAgo ? (ic / idxAgo - 1) : 0;
-    if (idxAbove50 && stockRet > idxRet) c7 = 1;
+    if (ima50 != null && ic > ima50 && stockRet > idxRet) c7 = 1;
   }
 
   const c = [c1, c2, c3, c4, c5, c6, c7];
@@ -743,7 +780,6 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
   let entryPx = 0, peakSinceEntry = 0;
   const equity = [];
   let peak = capital, maxDD = 0;
-  const STOP = -7, TRAIL = -10, TAKE = 20, MIN_RR = 1.5;
 
   // 포지션 사이징: 점수 비율 높고 변동성 낮을수록 큰 비중(0.5~1.0)
   const sizeFor = (score, maxScore, vol) => {
@@ -767,41 +803,29 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
     return idxSeries[j].close > ma;
   };
 
+  const STOP = BT_PARAMS.stop, TRAIL = BT_PARAMS.trail, TAKE = BT_PARAMS.take;
+
   for (let i = 0; i < series.length; i++) {
     const px = series[i].close;
     if (!strategyEnabled) {
       if (i === 0) { shares = capital / px; cash = 0; inPos = true; }
     } else {
-      const { score: sc, c } = scoreAt(series, i, idxSeries);
-      const maxScore = c.length;
-      if (i === 0) {
-        // 시작일: 포지션 사이징 적용해 진입
-        const size = sizeFor(sc, maxScore, annualVol(series, i));
-        const invest = capital * size;
-        shares = invest / px; cash = capital - invest; inPos = true;
-        entryPx = px; peakSinceEntry = px;
-      } else if (inPos) {
+      // C1~C7 점수 기반 매매 (워밍업 200일 이후부터 신호 사용)
+      const warm = Math.min(200, Math.floor(series.length / 3));
+      const { score: sc } = i >= warm ? scoreAt(series, i, idxSeries) : { score: 0 };
+      if (!inPos) {
+        if (i >= warm && sc >= BT_PARAMS.entry) {
+          shares = cash / px; cash = 0; inPos = true; entryPx = px; peakSinceEntry = px; trades++;
+        }
+      } else {
         peakSinceEntry = Math.max(peakSinceEntry, px);
         const lossPct = ((px - entryPx) / entryPx) * 100;
         const trailPct = ((px - peakSinceEntry) / peakSinceEntry) * 100;
-        const gainPct = lossPct;
         if (lossPct <= STOP) { cash += shares * px; shares = 0; inPos = false; trades++; stops++; }
         else if (trailPct <= TRAIL) { cash += shares * px; shares = 0; inPos = false; trades++; trails++; }
-        else if (gainPct >= TAKE) { cash += shares * px; shares = 0; inPos = false; trades++; takes++; }
-        else if (sc <= 2) { cash += shares * px; shares = 0; inPos = false; trades++; }
-      } else {
-        // 재진입 조건: 강신호 + 국면 + 손익비 + 실적회피
-        if (sc >= 5) {
-          if (!idxAbove50(i)) { /* 약세장 필터: 진입 보류 */ }
-          else if (nearEarnings(series[i].date, earnings)) { skipsEarn++; }
-          else if (rrFor(i) < MIN_RR) { skipsRR++; }
-          else {
-            const size = sizeFor(sc, maxScore, annualVol(series, i));
-            const invest = cash * size;
-            shares = invest / px; cash -= invest; inPos = true;
-            entryPx = px; peakSinceEntry = px; trades++;
-          }
-        }
+        else if (lossPct >= TAKE) { cash += shares * px; shares = 0; inPos = false; trades++; takes++; }
+        else if (i >= warm && sc <= BT_PARAMS.exit) { cash += shares * px; shares = 0; inPos = false; trades++; }
+        // 그 외 보유 유지 → 시장 추종
       }
     }
     const val = cash + shares * px;
