@@ -20,8 +20,9 @@ export default async function handler(req, res) {
   try {
     const r = await fetch(url);
     const status = r.status;
+    const bodyText = await r.text();   // 본문은 한 번만 읽는다
     let data;
-    try { data = await r.json(); } catch (e) { data = await r.text(); }
+    try { data = JSON.parse(bodyText); } catch (e) { data = bodyText; }
 
     if (!Array.isArray(data)) {
       // 게스트 제한·오류 메시지 등을 그대로 보여줌
