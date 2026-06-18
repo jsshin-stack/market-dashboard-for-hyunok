@@ -5,6 +5,7 @@
 // 환경변수: TWELVE_DATA_API_KEY, KV_REST_API_URL, KV_REST_API_TOKEN, (선택) CRON_SECRET
 
 import { Redis } from "@upstash/redis";
+const { computeMetrics, scoreFromMetrics } = require("../../lib/score");
 
 // Hobby 플랜 Fluid compute 최대 300초. 한 호출당 ~24종목(약 3분)만 수집하고 이어받기.
 export const maxDuration = 300;
@@ -60,7 +61,10 @@ async function fetchNews(finnhubKey) {
   try {
     const r = await fetch(`https://finnhub.io/api/v1/news?category=general&token=${finnhubKey}`);
     const j = await r.json();
-    return Array.isArray(j) ? j : [];
+    let arr = Array.isArray(j) ? j : [];
+    const cutoff = Date.now() / 1000 - 3 * 86400;   // 최근 3일
+    arr = arr.filter((a) => !a.datetime || a.datetime >= cutoff);
+    return arr;
   } catch (e) { return []; }
 }
 
@@ -76,43 +80,33 @@ async function timeSeries(symbol, key, size = 260) {
   return d.values;
 }
 
-// 한 종목의 C1~C7 계산 (quote.js와 동일 규칙). idxCloses는 C7용 지수 종가 배열.
-function computeScore(values, idx) {
-  const closes = values.map((v) => parseFloat(v.close)).filter((n) => !isNaN(n));
-  const highs = values.map((v) => parseFloat(v.high)).filter((n) => !isNaN(n));
-  const vols = values.map((v) => parseFloat(v.volume)).filter((n) => !isNaN(n));
-  const close = closes[0], prevClose = closes[1];
-  const ma200 = avg(closes.slice(0, 200));
-  const ma20 = avg(closes.slice(0, 20));
-  const high52 = highs.length ? Math.max(...highs.slice(0, 252)) : null;
-  const high30 = highs.length ? Math.max(...highs.slice(0, 30)) : null;
-  const pull = high52 ? ((close - high52) / high52) * 100 : null;
-  const fromMA20 = ma20 ? ((close - ma20) / ma20) * 100 : null;
-  const dayChg = prevClose ? ((close - prevClose) / prevClose) * 100 : null;
+// 한 종목의 원시 지표+점수 계산 (C7 백분위는 나중에 종목군 전체로 후처리).
+// rsRaw를 함께 저장해 두고, 수집 완료분으로 RS 백분위를 매겨 C7을 확정한다.
+function computeScore(values, idxRef) {
+  const m = computeMetrics(values);
+  if (!m) return null;
+  // 우선 rsPercentile 없이(=C7 보류) 점수화하고, rsRaw를 별도 보관
+  const s = scoreFromMetrics(m, idxRef, null);
+  s.asOf = values[0] ? values[0].datetime : null;
+  s.rsRaw = m.rsRaw;
+  s._idxAbove = idxRef && idxRef.ma50 != null ? (idxRef.close > idxRef.ma50 ? 1 : 0) : 0;
+  return s;
+}
 
-  const c1 = ma200 != null && close > ma200 ? 1 : 0;
-  const c2 = pull != null && pull <= -5 && pull >= -18 ? 1 : 0;
-  const c3 = c1 && pull != null && pull <= -3 && pull >= -15 ? 1 : 0;
-  const c4 = fromMA20 != null && Math.abs(fromMA20) <= 4 ? 1 : 0;
-  const c5 = high30 != null && close >= high30 * 0.98 ? 1 : 0;
-  let c6 = 0;
-  if (vols.length >= 21) {
-    const today = vols[0], pastAvg = avg(vols.slice(1, 21));
-    if (pastAvg > 0 && today >= pastAvg * 1.5) c6 = 1;
-  }
-  let c7 = 0;
-  if (idx && idx.ma50 != null && idx.close != null && idx.ret20 != null && closes[20]) {
-    const stockRet20 = close / closes[20] - 1;
-    if (idx.close > idx.ma50 && stockRet20 > idx.ret20) c7 = 1;
-  }
-  const c = [c1, c2, c3, c4, c5, c6, c7];
-  return {
-    close: +close.toFixed(2),
-    asOf: values[0] ? values[0].datetime : null,
-    dayChg: dayChg != null ? +dayChg.toFixed(2) : null,
-    pull: pull != null ? +pull.toFixed(1) : null,
-    c, score: c.reduce((a, b) => a + b, 0),
-  };
+// 수집된 종목들의 rsRaw로 RS 백분위를 매겨 C7을 확정 (종목군 내 상위 20%)
+function finalizeC7(stocks) {
+  const arr = Object.entries(stocks).filter(([, v]) => v && typeof v.rsRaw === "number");
+  arr.sort((a, b) => a[1].rsRaw - b[1].rsRaw);
+  const n = arr.length;
+  arr.forEach(([sym, v], i) => {
+    const pct = n > 1 ? (i / (n - 1)) * 100 : 100;
+    v.rsPercentile = Math.round(pct);
+    const c7 = (v._idxAbove && pct >= 80) ? 1 : 0;
+    if (Array.isArray(v.c) && v.c.length === 7) {
+      v.c[6] = c7;
+      v.score = v.c.reduce((a, b) => a + b, 0);
+    }
+  });
 }
 
 export default async function handler(req, res) {
@@ -179,6 +173,9 @@ export default async function handler(req, res) {
     const news = await fetchNews(finnhubKey);
     const eventBias = {};
     Object.keys(EVENT_KEYWORDS).forEach((type) => { eventBias[type] = biasForEvent(type, news); });
+
+    // 수집된 종목군 전체로 RS 백분위 → C7 확정
+    finalizeC7(stocks);
 
     const haveNow = ALL.filter((s) => stocks[s]).length;
     const snapshot = {

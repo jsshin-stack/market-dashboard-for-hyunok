@@ -372,13 +372,13 @@ function calcIndex(d) {
 const stockScore = (c) => c.reduce((a, b) => a + b, 0);
 // C1~C5 한 줄 설명 (카드 하단 범례용)
 const C_LEGEND = [
-  "추세: 주가가 200일선 위 (상승 추세)",
-  "풀백: 고점 대비 -5~-18% 건전한 조정",
-  "베이스: 추세 유지하며 가격 다지는 중",
-  "MA20 수렴: 20일선 근처(±4%)로 모임",
-  "돌파: 최근 30일 고점 돌파/근접",
-  "거래량: 돌파일 거래량 20일평균 1.5배↑",
-  "지수환경: 지수 50일선 위 + 상대강도 우위",
+  "추세: 완전 정배열(50>150>200일선) + 200일선 우상향",
+  "풀백: 30일 고점 -3×ATR 이내 (변동성 기반 지지)",
+  "베이스: 추세 유지하며 적정 조정 구간",
+  "변동성 수축: 최근 10일 변동폭이 ATR 이내로 응축",
+  "돌파: 최근 30일 고점 돌파",
+  "거래량: 돌파일 폭발(20일평균 1.5배↑) + 직전 고갈",
+  "주도주: 지수 50일선 위 + RS 상위 20%",
 ];
 function grade(s, max = 5) {
   const r = s / max;   // 충족 비율
@@ -473,12 +473,21 @@ function tradeAction(st, idxStates, conf) {
   const regimeOk = regimes.some((r) => r === "LEVERAGE" || r === "BASE");
   const confOk = conf ? conf.allPass : true;
 
-  // 손절/익절/추적 가격
-  const lvl = px ? {
-    stop: +(px * 0.93).toFixed(2),     // -7%
-    target: +(px * 1.20).toFixed(2),   // +20%
-    trail: +(px * 0.90).toFixed(2),    // -10% 추적(고점 기준이나 참고용 현재가 기준 표기)
-  } : null;
+  // 손절/익절/추적 가격: ATR 있으면 동적(진입가-2×ATR), 없으면 % 폴백
+  const atr = st.atr != null ? st.atr : null;
+  const lvl = px ? (atr != null ? {
+    stop: +(px - 2 * atr).toFixed(2),          // 동적 손절: 진입가 - 2×ATR
+    trail: +(px - 3 * atr).toFixed(2),          // 추적 손절: 진입가 - 3×ATR
+    target: +(px + 4 * atr).toFixed(2),         // 익절: 진입가 + 4×ATR (손익비 2:1)
+    mode: "ATR",
+    stopPct: +(((-2 * atr) / px) * 100).toFixed(1),
+  } : {
+    stop: +(px * 0.93).toFixed(2),
+    target: +(px * 1.20).toFixed(2),
+    trail: +(px * 0.90).toFixed(2),
+    mode: "%",
+    stopPct: -7,
+  }) : null;
 
   let action, color, reason, size = null;
   if (ratio >= 0.7 && regimeOk && confOk) {
@@ -934,7 +943,7 @@ function StockSignalCard({ st, idxStates, conf }) {
     );
   }
   const g = grade(st.score, st.c.length);
-  const labels = ["C1 추세", "C2 풀백", "C3 베이스", "C4 MA20수렴", "C5 돌파", "C6 거래량", "C7 지수환경"];
+  const labels = ["C1 추세", "C2 풀백", "C3 베이스", "C4 수축", "C5 돌파", "C6 거래량", "C7 주도주"];
   const nC = st.c.length;                    // 5 또는 7
   const maxScore = nC;
   const indices = stockIndices(st.t);
@@ -943,7 +952,16 @@ function StockSignalCard({ st, idxStates, conf }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
           <div style={{ fontSize: 12, color: st.color }}>{st.sector}</div>
-          <div style={{ fontSize: 19, fontWeight: 800, color: C.text }}>{st.t}</div>
+          <div style={{ fontSize: 19, fontWeight: 800, color: C.text, display: "flex", alignItems: "center", gap: 7 }}>
+            {st.t}
+            {st.imminent ? <span style={{ fontSize: 9.5, fontWeight: 700, color: C.amber, background: `${C.amber}22`, border: `1px solid ${C.amber}66`, padding: "2px 7px", borderRadius: 999 }}>⚡ 돌파 임박</span> : null}
+          </div>
+          {st.name && <div style={{ fontSize: 11.5, color: C.sub, marginTop: 1 }}>{st.name}</div>}
+          <div style={{ display: "flex", gap: 10, marginTop: 5, fontSize: 11, color: C.sub, flexWrap: "wrap" }}>
+            {st.close != null && <span>현재가 <b style={{ color: C.text }}>${st.close.toLocaleString()}</b></span>}
+            {st.per != null && <span>PER <b style={{ color: C.text }}>{st.per}</b></span>}
+            {st.pbr != null && <span>PBR <b style={{ color: C.text }}>{st.pbr}</b></span>}
+          </div>
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 26, fontWeight: 800, color: g.color, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
@@ -952,6 +970,21 @@ function StockSignalCard({ st, idxStates, conf }) {
           <div style={{ fontSize: 11.5, color: g.color, fontWeight: 700, marginTop: 3 }}>{g.dot} {g.label}</div>
         </div>
       </div>
+{st.chart && st.chart.length > 1 && (
+        <div style={{ marginTop: 12, height: 110 }}>
+          <div style={{ fontSize: 9.5, color: C.dim, marginBottom: 2 }}>최근 30일 종가</div>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={st.chart} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <XAxis dataKey="date" hide />
+              <YAxis domain={["auto", "auto"]} hide />
+              <Tooltip
+                contentStyle={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, fontSize: 11 }}
+                labelStyle={{ color: C.dim }} formatter={(v) => [`$${v}`, "종가"]} />
+              <Line type="monotone" dataKey="close" stroke={g.color} strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       <div style={{ display: "flex", justifyContent: "center", margin: "14px 0", padding: "10px 0", borderTop: `1px solid ${C.line}`, borderBottom: `1px solid ${C.line}` }}>
         <div style={{ textAlign: "center" }}>
@@ -970,11 +1003,11 @@ function StockSignalCard({ st, idxStates, conf }) {
           </div>
         ))}
       </div>
-      {/* C1~C7 한 줄 설명 */}
-      <div style={{ marginTop: 8, fontSize: 9.5, color: C.dim, lineHeight: 1.7 }}>
+      {/* C1~C7 설명 (3열) */}
+      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "4px 10px", fontSize: 9, color: C.dim, lineHeight: 1.4 }}>
         {C_LEGEND.slice(0, nC).map((d, j) => (
-          <div key={j} style={{ display: "flex", gap: 5 }}>
-            <span style={{ color: st.c[j] ? g.color : C.dim, fontWeight: 700, minWidth: 18 }}>{st.c[j] ? "✓" : "—"} C{j + 1}</span>
+          <div key={j} style={{ display: "flex", gap: 4 }}>
+            <span style={{ color: st.c[j] ? g.color : C.dim, fontWeight: 700, flexShrink: 0 }}>{st.c[j] ? "✓" : "—"}C{j + 1}</span>
             <span>{d}</span>
           </div>
         ))}
@@ -994,20 +1027,23 @@ function StockSignalCard({ st, idxStates, conf }) {
             </div>
             <div style={{ fontSize: 11, color: C.sub, lineHeight: 1.6, marginBottom: ta.lvl ? 9 : 0 }}>{ta.reason}</div>
             {ta.lvl && (
+              <>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
                 <div style={{ textAlign: "center", padding: "7px 2px", borderRadius: 7, background: C.panel2 }}>
-                  <div style={{ fontSize: 8.5, color: C.dim }}>손절 -7%</div>
+                  <div style={{ fontSize: 8.5, color: C.dim }}>{ta.lvl.mode === "ATR" ? "손절 -2×ATR" : "손절 -7%"}</div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: C.down, fontVariantNumeric: "tabular-nums" }}>${ta.lvl.stop}</div>
                 </div>
                 <div style={{ textAlign: "center", padding: "7px 2px", borderRadius: 7, background: C.panel2 }}>
-                  <div style={{ fontSize: 8.5, color: C.dim }}>추적손절 -10%</div>
+                  <div style={{ fontSize: 8.5, color: C.dim }}>{ta.lvl.mode === "ATR" ? "추적 -3×ATR" : "추적손절 -10%"}</div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: C.amber, fontVariantNumeric: "tabular-nums" }}>${ta.lvl.trail}</div>
                 </div>
                 <div style={{ textAlign: "center", padding: "7px 2px", borderRadius: 7, background: C.panel2 }}>
-                  <div style={{ fontSize: 8.5, color: C.dim }}>익절 +20%</div>
+                  <div style={{ fontSize: 8.5, color: C.dim }}>{ta.lvl.mode === "ATR" ? "익절 +4×ATR" : "익절 +20%"}</div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: C.up, fontVariantNumeric: "tabular-nums" }}>${ta.lvl.target}</div>
                 </div>
               </div>
+              {ta.lvl.mode === "ATR" && <div style={{ fontSize: 8.5, color: C.dim, marginTop: 5, textAlign: "center" }}>변동성(ATR ${st.atr}) 기반 동적 손절 · 손절폭 {ta.lvl.stopPct}%</div>}
+              </>
             )}
             <div style={{ fontSize: 9, color: C.dim, marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
               <span>지수 국면: {ta.regimes.join("/") || "—"} {ta.regimeOk ? "✓" : "⚠"}</span>
@@ -1035,7 +1071,7 @@ export default function App() {
     setOvLoading(true);
     setOvMsg(`${tk} 실시간 조회 중…`);
     try {
-      const resp = await fetch(`/api/quote?symbols=${encodeURIComponent(tk)}`);
+      const resp = await fetch(`/api/quote?symbols=${encodeURIComponent(tk)}&chart=1`);
       const json = await resp.json();
       const d = json && json.data && json.data[tk];
       if (resp.ok && d && !d.error) {
@@ -1432,6 +1468,54 @@ export default function App() {
                 <StockSignalCard st={ovSelectedStock} idxStates={{ NDX: ndx, SPX: spx }} conf={conf} />
               </>
             )}
+
+            {/* 매수 후보 리스트 (선택된 종목이 없을 때) */}
+            {!ovSelected && (() => {
+              const buys = allStocks
+                .filter((s) => s.analyzed && s.c)
+                .map((s) => ({ s, ta: tradeAction(s, { NDX: ndx, SPX: spx }, conf) }))
+                .filter((x) => x.ta.action === "매수")
+                .sort((a, b) => (b.s.score / b.s.c.length) - (a.s.score / a.s.c.length));
+              return (
+                <div style={{ marginTop: 18 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                    <TrendingUp size={15} color={C.up} /> 매수 후보 {buys.length > 0 ? `(${buys.length})` : ""}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: C.dim, marginBottom: 10, lineHeight: 1.5 }}>
+                    C1~C7 강신호 + 지수 우호 + 확인지표 통과 종목입니다. 클릭하면 상세 신호와 손절·익절가를 봅니다. (자동 수집/조회된 종목 기준)
+                  </div>
+                  {buys.length === 0 ? (
+                    <Card style={{ textAlign: "center", color: C.dim, fontSize: 12, padding: "18px 14px" }}>
+                      현재 매수 조건을 충족하는 종목이 없습니다. 시장 환경이 약하거나 아직 데이터 수집 전일 수 있어요.
+                    </Card>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                      {buys.slice(0, 20).map(({ s, ta }) => {
+                        const gg = grade(s.score, s.c.length);
+                        return (
+                          <button key={s.t} onClick={() => { setOvSelected(s.t); fetchOne(s.t); }} style={{
+                            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 13px", borderRadius: 9,
+                            background: C.panel2, border: `1px solid ${C.up}33`, cursor: "pointer", textAlign: "left", width: "100%",
+                          }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+                              <span style={{ width: 8, height: 8, borderRadius: 999, background: s.color, flexShrink: 0 }} />
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{s.t} {s.imminent ? <span style={{ fontSize: 9, color: C.amber }}>⚡</span> : null}</div>
+                                <div style={{ fontSize: 10, color: C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name || s.sector}</div>
+                              </div>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+                              {ta.size && <span style={{ fontSize: 10, color: C.up }}>비중 {ta.size}</span>}
+                              <span style={{ fontSize: 14, fontWeight: 800, color: gg.color, fontVariantNumeric: "tabular-nums" }}>{s.score}<span style={{ fontSize: 9, color: C.dim }}>/{s.c.length}</span></span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </>
         )}
 
@@ -1493,10 +1577,10 @@ export default function App() {
             {/* C1~C7 평가 기준 범례 */}
             <Card style={{ marginBottom: 14, background: C.panel2 }}>
               <div style={{ fontSize: 11, color: C.sub, fontWeight: 700, marginBottom: 8 }}>평가 기준 (C1~C7)</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 5 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px 14px" }}>
                 {C_LEGEND.map((d, j) => (
-                  <div key={j} style={{ display: "flex", gap: 7, fontSize: 10.5, color: C.dim, lineHeight: 1.5 }}>
-                    <span style={{ color: C.brass, fontWeight: 700, minWidth: 22, flexShrink: 0 }}>C{j + 1}</span>
+                  <div key={j} style={{ display: "flex", gap: 6, fontSize: 10, color: C.dim, lineHeight: 1.45 }}>
+                    <span style={{ color: C.brass, fontWeight: 700, flexShrink: 0 }}>C{j + 1}</span>
                     <span>{d}</span>
                   </div>
                 ))}
@@ -1513,7 +1597,7 @@ export default function App() {
               .sort((a, b) => (b.score / b.c.length) - (a.score / a.c.length))
               .map((s) => {
                 const g = grade(s.score, s.c.length);
-                const labels = ["C1 추세", "C2 풀백", "C3 베이스", "C4 MA20", "C5 돌파", "C6 거래량", "C7 지수환경"];
+                const labels = ["C1 추세", "C2 풀백", "C3 베이스", "C4 수축", "C5 돌파", "C6 거래량", "C7 주도주"];
                 return (
                   <Card key={s.sector} style={{ marginBottom: 12, borderColor: `${g.color}44` }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
@@ -1573,7 +1657,7 @@ export default function App() {
         {tab === "scan" && (
           <>
             <SectionTitle icon={TrendingUp} sub="충족률(점수/만점) 내림차순 · C1~C7">베이스 스캔 하이라이트</SectionTitle>
-            <div style={{ fontSize: 11.5, color: C.dim, margin: "0 2px 12px", fontStyle: "italic" }}>C1 추세 · C2 풀백 · C3 베이스 · C4 MA20수렴 · C5 돌파 · C6 거래량 · C7 지수환경 (종목별 5~7항목)</div>
+            <div style={{ fontSize: 11.5, color: C.dim, margin: "0 2px 12px", fontStyle: "italic" }}>C1 정배열 · C2 ATR풀백 · C3 베이스 · C4 변동성수축 · C5 돌파 · C6 거래량 · C7 주도주RS (종목별 5~7항목)</div>
             {ranked.map((st, i) => {
               const g = grade(st.score, (st.c ? st.c.length : 5));
               return (

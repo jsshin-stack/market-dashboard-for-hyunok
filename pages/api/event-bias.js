@@ -43,7 +43,10 @@ export default async function handler(req, res) {
   try {
     const r = await fetch(`https://finnhub.io/api/v1/news?category=general&token=${key}`);
     const news = await r.json();
-    const arr = Array.isArray(news) ? news : [];
+    let arr = Array.isArray(news) ? news : [];
+    // 최근 3일치만 사용 (datetime은 유닉스 초)
+    const cutoff = Date.now() / 1000 - 3 * 86400;
+    arr = arr.filter((a) => !a.datetime || a.datetime >= cutoff);
     const eventBias = {};
     Object.keys(EVENT_KEYWORDS).forEach((type) => { eventBias[type] = biasForEvent(type, arr); });
     res.status(200).json({ ok: true, eventBias, newsCount: arr.length, at: new Date().toISOString() });
