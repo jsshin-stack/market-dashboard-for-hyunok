@@ -669,9 +669,9 @@ const BT_PARAMS = {
   c6dry: 0.7,        // C6: 직전3일 거래량 < c6dry×50일평균
   entry: 2,          // 진입: C점수 ≥ entry
   exit: 0,           // 청산: C점수 ≤ exit
-  stop: -8,          // 손절 %
-  trail: -10,        // 추적손절 %
-  take: 25,          // 익절 %
+  stop: -10,         // 손절 %
+  trail: -15,        // 추적손절 % (추세를 오래 타도록 여유)
+  take: 0,           // 익절 % (0=익절 안 함, 추세 끝까지 보유 → 큰 상승 포착)
 };
 
 function btATR(series, idx, n = 14) {
@@ -811,8 +811,8 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
     if (!strategyEnabled) {
       if (i === 0) { shares = capital / px; cash = 0; inPos = true; }
     } else {
-      // 시작일엔 매수후보유와 동일하게 진입(초기 변동 반영). 이후 워밍업이 끝나면 팩터 신호로 매매.
-      const warm = Math.min(200, Math.floor(series.length / 3));
+      // 시작일 진입(초기 변동 반영). 워밍업은 지표 계산 최소치(30일)만 — 길면 매도 후 재매수가 막힘.
+      const warm = Math.min(30, Math.floor(series.length / 5));
       if (i === 0) {
         shares = capital / px; cash = 0; inPos = true; entryPx = px; peakSinceEntry = px;
         signals.push({ date: series[i].date, type: "buy", price: px, value: capital });
@@ -830,7 +830,7 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
           let exitKind = null;
           if (lossPct <= STOP) { exitKind = "stop"; stops++; }
           else if (trailPct <= TRAIL) { exitKind = "trail"; trails++; }
-          else if (lossPct >= TAKE) { exitKind = "take"; takes++; }
+          else if (TAKE > 0 && lossPct >= TAKE) { exitKind = "take"; takes++; }
           else if (i >= warm && sc <= BT_PARAMS.exit) { exitKind = "signal"; }
           if (exitKind) {
             cash += shares * px; shares = 0; inPos = false; trades++;
