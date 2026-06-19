@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import {
   TrendingUp, Activity, Layers, Calendar, Search, ShieldCheck,
   AlertTriangle, ChevronDown, ChevronUp, ChevronRight, Gauge, ArrowUpRight, ArrowDownRight, Minus, Target,
-  FlaskConical, Wallet, RefreshCw,
+  FlaskConical, Wallet, RefreshCw, Star,
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 
@@ -804,28 +804,40 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
   };
 
   const STOP = BT_PARAMS.stop, TRAIL = BT_PARAMS.trail, TAKE = BT_PARAMS.take;
+  const signals = [];   // 매수/매도 시점 기록 {date, type, price}
 
   for (let i = 0; i < series.length; i++) {
     const px = series[i].close;
     if (!strategyEnabled) {
       if (i === 0) { shares = capital / px; cash = 0; inPos = true; }
     } else {
-      // C1~C7 점수 기반 매매 (워밍업 200일 이후부터 신호 사용)
+      // 시작일엔 매수후보유와 동일하게 진입(초기 변동 반영). 이후 워밍업이 끝나면 팩터 신호로 매매.
       const warm = Math.min(200, Math.floor(series.length / 3));
-      const { score: sc } = i >= warm ? scoreAt(series, i, idxSeries) : { score: 0 };
-      if (!inPos) {
-        if (i >= warm && sc >= BT_PARAMS.entry) {
-          shares = cash / px; cash = 0; inPos = true; entryPx = px; peakSinceEntry = px; trades++;
-        }
+      if (i === 0) {
+        shares = capital / px; cash = 0; inPos = true; entryPx = px; peakSinceEntry = px;
+        signals.push({ date: series[i].date, type: "buy", price: px, value: capital });
       } else {
-        peakSinceEntry = Math.max(peakSinceEntry, px);
-        const lossPct = ((px - entryPx) / entryPx) * 100;
-        const trailPct = ((px - peakSinceEntry) / peakSinceEntry) * 100;
-        if (lossPct <= STOP) { cash += shares * px; shares = 0; inPos = false; trades++; stops++; }
-        else if (trailPct <= TRAIL) { cash += shares * px; shares = 0; inPos = false; trades++; trails++; }
-        else if (lossPct >= TAKE) { cash += shares * px; shares = 0; inPos = false; trades++; takes++; }
-        else if (i >= warm && sc <= BT_PARAMS.exit) { cash += shares * px; shares = 0; inPos = false; trades++; }
-        // 그 외 보유 유지 → 시장 추종
+        const { score: sc } = i >= warm ? scoreAt(series, i, idxSeries) : { score: 99 };  // 워밍업중엔 보유 유지
+        if (!inPos) {
+          if (i >= warm && sc >= BT_PARAMS.entry) {
+            shares = cash / px; cash = 0; inPos = true; entryPx = px; peakSinceEntry = px; trades++;
+            signals.push({ date: series[i].date, type: "buy", price: px, value: shares * px });
+          }
+        } else {
+          peakSinceEntry = Math.max(peakSinceEntry, px);
+          const lossPct = ((px - entryPx) / entryPx) * 100;
+          const trailPct = ((px - peakSinceEntry) / peakSinceEntry) * 100;
+          let exitKind = null;
+          if (lossPct <= STOP) { exitKind = "stop"; stops++; }
+          else if (trailPct <= TRAIL) { exitKind = "trail"; trails++; }
+          else if (lossPct >= TAKE) { exitKind = "take"; takes++; }
+          else if (i >= warm && sc <= BT_PARAMS.exit) { exitKind = "signal"; }
+          if (exitKind) {
+            cash += shares * px; shares = 0; inPos = false; trades++;
+            signals.push({ date: series[i].date, type: "sell", kind: exitKind, price: px, value: cash });
+          }
+          // 그 외 보유 유지 → 시장 추종
+        }
       }
     }
     const val = cash + shares * px;
@@ -838,7 +850,7 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
     startPrice: start, endPrice: series[series.length - 1].close,
     finalValue: endVal, profit: endVal - capital,
     retPct: ((endVal - capital) / capital) * 100,
-    maxDD: maxDD * 100, trades, stops, trails, takes, skipsRR, skipsEarn, equity,
+    maxDD: maxDD * 100, trades, stops, trails, takes, skipsRR, skipsEarn, equity, signals,
   };
 }
 
@@ -1088,6 +1100,68 @@ export default function App() {
   const [ovLoading, setOvLoading] = useState(false);   // 개별 종목 조회 중
   const [ovMsg, setOvMsg] = useState("");
 
+  // 즐겨찾기 상태
+  const [favTickers, setFavTickers] = useState([]);       // 저장된 티커 목록
+  const [favData, setFavData] = useState({});             // {티커: 실시간 조회 결과}
+  const [favLoading, setFavLoading] = useState(false);
+  const [favMsg, setFavMsg] = useState("");
+
+  // 즐겨찾기 목록 불러오기
+  async function loadFavorites() {
+    try {
+      const r = await fetch("/api/favorites");
+      const j = await r.json();
+      if (j.ok) setFavTickers(j.tickers || []);
+      return j.tickers || [];
+    } catch (e) { return favTickers; }
+  }
+  // 즐겨찾기 추가/삭제
+  async function toggleFavorite(ticker, add) {
+    const tk = ticker.trim().toUpperCase();
+    if (!tk) return;
+    try {
+      const r = await fetch("/api/favorites", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(add ? { add: tk } : { remove: tk }),
+      });
+      const j = await r.json();
+      if (j.ok) setFavTickers(j.tickers || []);
+    } catch (e) { /* 무시 */ }
+  }
+  // 즐겨찾기 종목들을 실시간 조회 (탭 열 때마다)
+  async function refreshFavorites(tickers) {
+    const list = tickers || favTickers;
+    if (!list.length) { setFavData({}); return; }
+    setFavLoading(true);
+    setFavMsg(`${list.length}개 종목 실시간 조회 중…`);
+    const out = {};
+    try {
+      // 한도 보호: 한 번에 최대 8개씩 쉼표로 묶어 조회
+      for (let i = 0; i < list.length; i += 8) {
+        const batch = list.slice(i, i + 8);
+        const r = await fetch(`/api/quote?symbols=${encodeURIComponent(batch.join(","))}`);
+        const j = await r.json();
+        if (j && j.data) Object.assign(out, j.data);
+      }
+      setFavData(out);
+      setFavMsg(`갱신 완료 · ${new Date().toLocaleTimeString("ko-KR")}`);
+    } catch (e) { setFavMsg("조회 실패 — 잠시 후 다시 시도하세요."); }
+    finally { setFavLoading(false); }
+  }
+  // 즐겨찾기 탭 열 때 목록 로드 후 자동 조회
+  useEffect(() => {
+    if (tab !== "favorites") return;
+    let cancelled = false;
+    (async () => {
+      const list = await loadFavorites();
+      if (!cancelled) refreshFavorites(list);
+    })();
+    return () => { cancelled = true; };
+  }, [tab]);
+  // 첫 로드 시 즐겨찾기 목록만 미리 로드(별 표시용)
+  useEffect(() => { loadFavorites(); }, []);
+
+
   // 종목 1개만 실시간 조회 (검색→선택 시 호출, 한도 절약)
   async function fetchOne(ticker) {
     const tk = ticker.trim().toUpperCase();
@@ -1273,8 +1347,10 @@ export default function App() {
   const allStocks = useMemo(() => {
     // 분석값(C1~C5)이 있는 종목 맵
     const analyzed = {};
+    // 시드(SECTORS)는 종목명·섹터·색상 등 메타정보로만 사용.
+    // C1~C7 점수는 실시간 조회/스냅샷(둘 다 7팩터)에서만 채워진다 — 옛 5팩터는 평가에 쓰지 않음.
     SECTORS.forEach((s) => s.stocks.forEach((st) => {
-      analyzed[st.t] = { ...st, sector: s.sector, color: s.color, score: stockScore(st.c), analyzed: true };
+      analyzed[st.t] = { t: st.t, sector: s.sector, color: s.color, c: null, score: null, pull: null, analyzed: false, seedOnly: true };
     }));
     // 실시간 데이터가 있으면 해당 종목의 c/score/pull을 실제값(7항목)으로 덮어쓰기 + note 동적 생성
     const liveNote = (d) => {
@@ -1287,8 +1363,8 @@ export default function App() {
       return `실시간 분석 — ${parts.join(" · ")}.`;
     };
     Object.entries(live).forEach(([sym, d]) => {
-      if (analyzed[sym]) analyzed[sym] = { ...analyzed[sym], c: d.c, score: d.score, pull: d.pull, close: d.close, atr: d.atr, per: d.per, pbr: d.pbr, name: d.name || analyzed[sym].name, imminent: d.imminent, chart: d.chart, note: liveNote(d), live: true };
-      else analyzed[sym] = { t: sym, sector: "기타", color: "#A6B0BE", c: d.c, score: d.score, pull: d.pull, close: d.close, atr: d.atr, per: d.per, pbr: d.pbr, name: d.name, imminent: d.imminent, chart: d.chart, note: liveNote(d), analyzed: true, live: true };
+      if (analyzed[sym]) analyzed[sym] = { ...analyzed[sym], c: d.c, score: d.score, pull: d.pull, close: d.close, atr: d.atr, per: d.per, pbr: d.pbr, name: d.name || analyzed[sym].name, imminent: d.imminent, chart: d.chart, note: liveNote(d), analyzed: true, seedOnly: false, live: true };
+      else analyzed[sym] = { t: sym, sector: "기타", color: "#A6B0BE", c: d.c, score: d.score, pull: d.pull, close: d.close, atr: d.atr, per: d.per, pbr: d.pbr, name: d.name, imminent: d.imminent, chart: d.chart, note: liveNote(d), analyzed: true, seedOnly: false, live: true };
     });
     // NDX100 전체를 기준으로 병합 (분석값 있으면 사용, 없으면 미분석)
     const merged = NDX100.map((m) => {
@@ -1317,6 +1393,7 @@ export default function App() {
 
   const TABS = [
     { id: "overview", label: "종합", icon: Gauge },
+    { id: "favorites", label: "즐겨찾기", icon: Star },
     { id: "confirm", label: "확인지표", icon: ShieldCheck },
     { id: "sectors", label: "섹터", icon: Layers },
     { id: "scan", label: "베이스 스캔", icon: TrendingUp },
@@ -1360,9 +1437,17 @@ export default function App() {
     const btOpts = { idxSeries, earnings: meta.earnings };
     const hold = runBacktest(series, amt, meta, false);
     const strat = runBacktest(series, amt, meta, true, btOpts);
-    const chart = series.map((p, i) => ({
-      date: p.date, "매수후보유": hold.equity[i].value, "전략": strat.equity[i].value,
-    }));
+    const sigByDate = {};
+    (strat.signals || []).forEach((s) => { sigByDate[s.date] = s; });
+    const chart = series.map((p, i) => {
+      const sig = sigByDate[p.date];
+      return {
+        date: p.date, "매수후보유": hold.equity[i].value, "전략": strat.equity[i].value,
+        sigType: sig ? sig.type : null,           // "buy" | "sell" | null
+        sigKind: sig ? (sig.kind || null) : null, // 매도 종류
+        sigValue: sig ? strat.equity[i].value : null,
+      };
+    });
     setBtResult({ tk, meta, amt, series, hold, strat, chart, isReal: source === "실제 API", source });
   };
 
@@ -1528,6 +1613,19 @@ export default function App() {
                     <RefreshCw size={12} style={ovLoading ? { animation: "spin 1s linear infinite" } : undefined} /> 최신 시세로 조회
                   </button>
                   {ovMsg && <span style={{ fontSize: 11, color: ovMsg.includes("실패") || ovMsg.includes("오류") ? C.down : C.dim }}>{ovMsg}</span>}
+                  {(() => {
+                    const tk = (ovSelectedStock.t || "").toUpperCase();
+                    const isFav = favTickers.includes(tk);
+                    return (
+                      <button onClick={() => toggleFavorite(tk, !isFav)} style={{
+                        display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 8,
+                        border: `1px solid ${isFav ? C.brass : C.line}`, background: isFav ? `${C.brass}1A` : "transparent",
+                        color: isFav ? C.brass : C.sub, cursor: "pointer", fontSize: 12, fontWeight: 600,
+                      }}>
+                        <Star size={13} fill={isFav ? C.brass : "none"} /> {isFav ? "즐겨찾기됨" : "즐겨찾기 추가"}
+                      </button>
+                    );
+                  })()}
                 </div>
                 <StockSignalCard st={ovSelectedStock} idxStates={{ NDX: ndx, SPX: spx }} conf={conf} />
               </>
@@ -1580,6 +1678,84 @@ export default function App() {
                 </div>
               );
             })()}
+          </>
+        )}
+
+        {/* ── 즐겨찾기 ── */}
+        {tab === "favorites" && (
+          <>
+            <SectionTitle icon={Star} sub="저장 종목의 데일리 매수/보유/매도 체크">즐겨찾기</SectionTitle>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 2px 12px" }}>
+              <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.5, flex: 1 }}>
+                종합 탭에서 종목 검색 후 '즐겨찾기 추가'로 누적됩니다. 탭을 열 때마다 실시간 조회해 종목별 행동(매수·보유·매도)을 판정합니다. (모든 사용자 공유 목록)
+              </div>
+              <button onClick={() => refreshFavorites()} disabled={favLoading} style={{
+                display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8,
+                border: `1px solid ${C.line}`, background: C.panel2, color: C.sub, cursor: favLoading ? "default" : "pointer", fontSize: 12, fontWeight: 600, flexShrink: 0,
+              }}>
+                <RefreshCw size={13} style={favLoading ? { animation: "spin 1s linear infinite" } : undefined} /> 갱신
+              </button>
+            </div>
+            {favMsg && <div style={{ fontSize: 10.5, color: favMsg.includes("실패") ? C.down : C.dim, marginBottom: 10 }}>{favMsg}</div>}
+
+            {favTickers.length === 0 ? (
+              <Card style={{ textAlign: "center", color: C.dim, fontSize: 13, padding: "28px 16px" }}>
+                <Star size={22} color={C.dim} style={{ marginBottom: 8 }} />
+                <div>아직 즐겨찾기한 종목이 없습니다.</div>
+                <div style={{ fontSize: 11, marginTop: 6 }}>종합 탭에서 종목을 검색한 뒤 '즐겨찾기 추가'를 누르세요.</div>
+              </Card>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {favTickers.map((tk) => {
+                  const d = favData[tk];
+                  if (!d || d.error) {
+                    return (
+                      <Card key={tk} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div style={{ fontSize: 14, fontWeight: 700 }}>{tk}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ fontSize: 11, color: C.dim }}>{favLoading ? "조회 중…" : (d && d.error ? "데이터 없음" : "대기")}</span>
+                          <button onClick={() => toggleFavorite(tk, false)} style={{ border: "none", background: "transparent", color: C.dim, cursor: "pointer", fontSize: 16 }}>✕</button>
+                        </div>
+                      </Card>
+                    );
+                  }
+                  // 실시간 데이터로 매수/보유/매도 판정
+                  const stObj = { t: tk, name: d.name, sector: "즐겨찾기", color: C.brass, c: d.c, score: d.score, pull: d.pull, close: d.close, atr: d.atr, per: d.per, pbr: d.pbr, imminent: d.imminent, analyzed: true };
+                  const ta = tradeAction(stObj, { NDX: ndx, SPX: spx }, conf);
+                  return (
+                    <Card key={tk} style={{ borderLeft: `3px solid ${ta.color}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{tk}</span>
+                            {d.name && <span style={{ fontSize: 11.5, color: C.sub }}>{d.name}</span>}
+                            {d.imminent ? <span style={{ fontSize: 9, color: C.amber }}>⚡ 돌파임박</span> : null}
+                          </div>
+                          <div style={{ display: "flex", gap: 12, marginTop: 4, fontSize: 11, color: C.sub, flexWrap: "wrap" }}>
+                            {d.close != null && <span>현재가 <b style={{ color: C.text }}>${d.close.toLocaleString()}</b></span>}
+                            <span>점수 <b style={{ color: C.text }}>{d.score}/{d.c ? d.c.length : 7}</b></span>
+                            {d.pull != null && <span>고점대비 {d.pull}%</span>}
+                          </div>
+                          <div style={{ fontSize: 11.5, color: C.dim, marginTop: 6, lineHeight: 1.5 }}>{ta.reason}</div>
+                          {ta.lvl && (
+                            <div style={{ display: "flex", gap: 12, marginTop: 6, fontSize: 10.5 }}>
+                              <span style={{ color: C.down }}>손절 ${ta.lvl.stop}</span>
+                              <span style={{ color: C.amber }}>추적 ${ta.lvl.trail}</span>
+                              <span style={{ color: C.up }}>익절 ${ta.lvl.target}</span>
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ textAlign: "right", flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+                          <span style={{ padding: "5px 12px", borderRadius: 999, background: `${ta.color}22`, color: ta.color, fontSize: 13, fontWeight: 800 }}>{ta.action}</span>
+                          {ta.size && <span style={{ fontSize: 10, color: C.dim }}>제안 비중 {ta.size}</span>}
+                          <button onClick={() => toggleFavorite(tk, false)} style={{ border: "none", background: "transparent", color: C.dim, cursor: "pointer", fontSize: 14 }}>✕ 삭제</button>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
           </>
         )}
 
@@ -1940,9 +2116,25 @@ export default function App() {
                           labelStyle={{ color: C.sub }} formatter={(v) => `$${Number(v).toLocaleString()}`} />
                         <Legend wrapperStyle={{ fontSize: 11 }} />
                         <Line type="monotone" dataKey="매수후보유" stroke={C.blue} dot={false} strokeWidth={2} />
-                        <Line type="monotone" dataKey="전략" stroke={C.brass} dot={false} strokeWidth={2} />
+                        <Line type="monotone" dataKey="전략" stroke={C.brass} strokeWidth={2}
+                          dot={(props) => {
+                            const { cx, cy, payload } = props;
+                            if (!payload || !payload.sigType) return <g key={props.key} />;
+                            const isBuy = payload.sigType === "buy";
+                            const col = isBuy ? C.up : C.down;
+                            return (
+                              <g key={props.key}>
+                                <circle cx={cx} cy={cy} r={4} fill={col} stroke={C.bg} strokeWidth={1.5} />
+                              </g>
+                            );
+                          }} />
                       </LineChart>
                     </ResponsiveContainer>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6, display: "flex", gap: 14, justifyContent: "center" }}>
+                    <span><span style={{ color: C.up }}>●</span> 매수 시점</span>
+                    <span><span style={{ color: C.down }}>●</span> 매도 시점(손절·추적·익절·신호)</span>
+                    <span>전략 매매 {btResult.strat.trades}회 · 손절 {btResult.strat.stops} · 추적 {btResult.strat.trails} · 익절 {btResult.strat.takes}</span>
                   </div>
                 </Card>
 

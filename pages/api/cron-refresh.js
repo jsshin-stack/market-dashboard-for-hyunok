@@ -14,7 +14,7 @@ const redis = Redis.fromEnv();
 
 // 수집 대상: NDX100 + 주요 SPX 종목 + 섹터 ETF
 const NDX_TICKERS = ["NVDA","GOOG","GOOGL","AAPL","MSFT","AMZN","AVGO","TSLA","META","MU","WMT","AMD","ASML","INTC","CSCO","COST","LRCX","ARM","PLTR","AMAT","NFLX","TXN","QCOM","KLAC","LIN","PANW","ADI","STX","TMUS","PEP","APP","WDC","AMGN","CRWD","MRVL","GILD","ISRG","SHOP","HON","BKNG","PDD","SBUX","VRTX","CEG","CDNS","MAR","ADBE","FTNT","SNPS","CMCSA","ADP","INTU","MELI","MNST","CSX","NXPI","DDOG","MPWR","ABNB","MDLZ","ROST","ORLY","DASH","AEP","CTAS","WBD","BKR","REGN","PCAR","FANG","MSTR","MCHP","FAST","EA","XEL","FER","ODFL","EXC","ADSK","IDXX","TTWO","CCEP","KDP","ALNY","PYPL","TRI","PAYX","AXON","WDAY","ROP","CPRT","KHC","GEHC","DXCM","CTSH","TEAM","INSM","VRSK","ZS","CHTR","CSGP"];
-const SPX_EXTRA = ["JPM","V","MA","UNH","HD","PG","JNJ","XOM","BAC"];
+const SPX_EXTRA = ["JPM","V","MA","UNH","HD","PG","JNJ","XOM","BAC","LLY","GE","NOW","ORCL","CRM"];
 const SECTOR_ETFS = ["SOXX","XLK","IGV","XLV","XLY"];
 const ALL = [...new Set([...NDX_TICKERS, ...SPX_EXTRA, ...SECTOR_ETFS])];
 

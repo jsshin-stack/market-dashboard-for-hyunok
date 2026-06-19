@@ -85,9 +85,9 @@ export default async function handler(req, res) {
         bias: j.bias, why: j.why, label: j.label,
       };
     });
-    // 중요도 순 정렬(High>Medium>Low) 후 날짜순
+    // 날짜 오름차순 정렬 (같은 시각이면 영향도 높은 순)
     const rank = { High: 0, Medium: 1, Low: 2, Holiday: 3 };
-    events.sort((a, b) => (rank[a.impact] ?? 9) - (rank[b.impact] ?? 9) || new Date(a.date) - new Date(b.date));
+    events.sort((a, b) => new Date(a.date) - new Date(b.date) || (rank[a.impact] ?? 9) - (rank[b.impact] ?? 9));
 
     res.status(200).json({ ok: true, count: events.length, events, at: new Date().toISOString() });
   } catch (e) {
