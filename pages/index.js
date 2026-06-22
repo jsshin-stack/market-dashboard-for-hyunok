@@ -465,8 +465,10 @@ function stockIndices(ticker) {
    매수 시 손절가(-7%)·익절가(+20%)·추적손절(-10%)을 함께 제시한다.
    반환: { action, color, reason, stop, target, trail, size } */
 function tradeAction(st, idxStates, conf) {
-  const score = st.score, maxC = st.c ? st.c.length : 5;
-  const ratio = score / maxC;
+  // 통합 강도(10팩터)가 있으면 그것을 기준으로(상단 배지와 일치). 없으면 7팩터 비율.
+  const hasCombined = st.combined && typeof st.combined.strength === "number";
+  const ratio = hasCombined ? st.combined.strength / 100 : (st.score / (st.c ? st.c.length : 5));
+  const scoreLabel = hasCombined ? `강도 ${st.combined.strength}%` : `${st.score}/${st.c ? st.c.length : 5}`;
   const px = st.close != null ? st.close : (st.px != null ? st.px : null);
   // 지수 국면: 보유 지수 중 하나라도 강세(LEVERAGE/BASE)면 우호
   const regimes = stockIndices(st.t).map((ix) => idxStates?.[ix]?.state).filter(Boolean);
@@ -492,19 +494,19 @@ function tradeAction(st, idxStates, conf) {
   let action, color, reason, size = null;
   if (ratio >= 0.7 && regimeOk && confOk) {
     action = "매수"; color = C.up; size = ratio >= 0.85 ? "100%" : "70%";
-    reason = `강신호(${score}/${maxC}) + 지수 우호 + 확인지표 통과. 진입 적합.`;
+    reason = `강신호(${scoreLabel}) + 지수 우호 + 확인지표 통과. 진입 적합.`;
   } else if (ratio >= 0.7 && (!regimeOk || !confOk)) {
     action = "관망"; color = C.amber;
     reason = `종목 신호는 강하나 ${!regimeOk ? "지수 약세" : "확인지표 미달"}. 환경 개선 시 진입.`;
   } else if (ratio >= 0.45) {
     action = "보유/관찰"; color = C.brass;
-    reason = `중간 신호(${score}/${maxC}). 신규 진입은 보류, 보유 중이면 손절 지키며 관찰.`;
+    reason = `중간 신호(${scoreLabel}). 신규 진입은 보류, 보유 중이면 손절 지키며 관찰.`;
   } else if (ratio >= 0.3) {
     action = "관망"; color = C.amber;
-    reason = `약한 신호(${score}/${maxC}). 베이스 형성·돌파 대기.`;
+    reason = `약한 신호(${scoreLabel}). 베이스 형성·돌파 대기.`;
   } else {
     action = "회피/매도"; color = C.down;
-    reason = `신호 미달(${score}/${maxC}). 신규 진입 자제, 보유 중이면 비중 축소.`;
+    reason = `신호 미달(${scoreLabel}). 신규 진입 자제, 보유 중이면 비중 축소.`;
   }
   return { action, color, reason, size, lvl, regimes, regimeOk, confOk };
 }
@@ -1288,6 +1290,7 @@ export default function App() {
   }
   // 백테스트 입력 상태 (기본: 오늘 기준 최근 1년)
   const [btTicker, setBtTicker] = useState("NVDA");
+  const [btPicked, setBtPicked] = useState(true);   // 자동완성에서 선택했거나 초기값이면 목록 숨김
   const [btStart, setBtStart] = useState(() => { const d = new Date(); d.setFullYear(d.getFullYear() - 1); return d.toISOString().slice(0, 10); });
   const [btEnd, setBtEnd] = useState(() => new Date().toISOString().slice(0, 10));
   const [btAmount, setBtAmount] = useState("10000");
@@ -2127,8 +2130,32 @@ export default function App() {
             <Card style={{ marginBottom: 14 }}>
               <div style={{ marginBottom: 12 }}>
                 <span style={{ display: "block", fontSize: 11, color: C.sub, marginBottom: 6 }}>종목 티커</span>
-                <input value={btTicker} onChange={(e) => setBtTicker(e.target.value)} placeholder="예: NVDA"
+                <input value={btTicker} onChange={(e) => { setBtTicker(e.target.value); setBtPicked(false); }} placeholder="예: NVDA (알파벳 입력 시 목록)"
                   style={{ width: "100%", boxSizing: "border-box", padding: "12px 14px", fontSize: 15, borderRadius: 10, border: `1px solid ${C.line}`, background: C.panel2, color: C.text, outline: "none", textTransform: "uppercase" }} />
+                {/* 자동완성: 입력 중이고 아직 선택 안 했을 때 */}
+                {(() => {
+                  const q = btTicker.trim().toLowerCase();
+                  if (!q || btPicked) return null;
+                  const found = allStocks.filter((s) => s.t.toLowerCase().includes(q)).slice(0, 8);
+                  if (found.length === 0) {
+                    return <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6 }}>"{btTicker.toUpperCase()}"는 수록 목록에 없습니다. 그대로 입력해 백테스트를 실행하면 실제 시세로 조회합니다.</div>;
+                  }
+                  return (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 7 }}>
+                      {found.map((s) => (
+                        <button key={s.t} onClick={() => { setBtTicker(s.t); setBtPicked(true); }} style={{
+                          display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8, cursor: "pointer", textAlign: "left",
+                          background: C.panel, border: `1px solid ${C.line}`,
+                        }}>
+                          <span style={{ width: 7, height: 7, borderRadius: 2, background: s.color || C.dim, flexShrink: 0 }} />
+                          <span style={{ fontSize: 13, fontWeight: 700, color: C.text, minWidth: 48 }}>{s.t}</span>
+                          <span style={{ fontSize: 10.5, color: C.sub, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name || s.sector}</span>
+                          <ChevronRight size={14} color={C.dim} />
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
                 <div>
