@@ -5,7 +5,7 @@
 // 환경변수: TWELVE_DATA_API_KEY, KV_REST_API_URL, KV_REST_API_TOKEN, (선택) CRON_SECRET
 
 import { Redis } from "@upstash/redis";
-const { computeMetrics, scoreFromMetrics } = require("../../lib/score");
+const { computeMetrics, scoreFromMetrics, trendChannel, multiTrend, combineScore } = require("../../lib/score");
 
 // Hobby 플랜 Fluid compute 최대 300초. 한 호출당 ~24종목(약 3분)만 수집하고 이어받기.
 export const maxDuration = 300;
@@ -90,6 +90,9 @@ function computeScore(values, idxRef) {
   s.asOf = values[0] ? values[0].datetime : null;
   s.rsRaw = m.rsRaw;
   s._idxAbove = idxRef && idxRef.ma50 != null ? (idxRef.close > idxRef.ma50 ? 1 : 0) : 0;
+  // 추세채널·다기간추세 (이미 받은 시계열로 계산 — 추가 API 호출 없음)
+  try { s.channel = trendChannel(values, 90) || null; } catch (e) { s.channel = null; }
+  try { s.multiTrend = multiTrend(values) || null; } catch (e) { s.multiTrend = null; }
   return s;
 }
 
@@ -106,6 +109,8 @@ function finalizeC7(stocks) {
       v.c[6] = c7;
       v.score = v.c.reduce((a, b) => a + b, 0);
     }
+    // C7 확정 후 10팩터 통합 강도 계산
+    try { v.combined = combineScore({ c: v.c }, v.channel || null); } catch (e) { v.combined = null; }
   });
 }
 

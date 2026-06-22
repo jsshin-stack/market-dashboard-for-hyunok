@@ -3,7 +3,7 @@
 // 추가: PER/PBR(Finnhub), 종목명, 최근 30일 차트용 시계열.
 // 사용법: /api/quote?symbols=NVDA   (검색용은 보통 1개), &chart=1 이면 차트 포함
 
-const { scoreUniverse } = require("../../lib/score");
+const { scoreUniverse, trendChannel, combineScore, multiTrend } = require("../../lib/score");
 
 async function fetchTS(sym, apiKey) {
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=1day&outputsize=260&timezone=America/New_York&apikey=${apiKey}`;
@@ -75,6 +75,17 @@ export default async function handler(req, res) {
       if (withChart && vals) {
         results[sym].chart = vals.slice(0, 30).reverse().map((v) => ({ date: v.datetime, close: +parseFloat(v.close).toFixed(2) }));
       }
+      // 추세채널(C8 추세구조·C9 채널위치·C10 오버슈팅) — 최근 90일
+      try {
+        const tc = trendChannel(vals, 90);
+        if (tc) results[sym].channel = tc;
+        // 10팩터 통합 점수 + 가중 강도(%)
+        const combined = combineScore(scored[sym], tc || null);
+        results[sym].combined = combined;
+        // 다기간 추세(장기/단기 분리 + 국면)
+        const mt = multiTrend(vals);
+        if (mt) results[sym].multiTrend = mt;
+      } catch (e) { /* 채널/통합 계산 실패 시 생략 */ }
     }
 
     res.status(200).json({ ok: true, data: results });

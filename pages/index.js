@@ -978,7 +978,7 @@ function StockSignalCard({ st, idxStates, conf }) {
       </Card>
     );
   }
-  const g = grade(st.score, st.c.length);
+  const g = st.combined ? grade(st.combined.strength, 100) : grade(st.score, st.c.length);
   const labels = ["C1 추세", "C2 풀백", "C3 베이스", "C4 수축", "C5 돌파", "C6 거래량", "C7 주도주"];
   const nC = st.c.length;                    // 5 또는 7
   const maxScore = nC;
@@ -1000,10 +1000,22 @@ function StockSignalCard({ st, idxStates, conf }) {
           </div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 26, fontWeight: 800, color: g.color, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
-            {st.score}<span style={{ fontSize: 13, color: C.dim }}>/{maxScore}</span>
-          </div>
-          <div style={{ fontSize: 11.5, color: g.color, fontWeight: 700, marginTop: 3 }}>{g.dot} {g.label}</div>
+          {st.combined ? (
+            <>
+              <div style={{ fontSize: 26, fontWeight: 800, color: g.color, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
+                {st.combined.plusCount}<span style={{ fontSize: 13, color: C.dim }}>/{st.combined.totalFactors}</span>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: g.color, marginTop: 2 }}>강도 {st.combined.strength}%</div>
+              <div style={{ fontSize: 11, color: g.color, fontWeight: 700, marginTop: 2 }}>{g.dot} {g.label}</div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 26, fontWeight: 800, color: g.color, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
+                {st.score}<span style={{ fontSize: 13, color: C.dim }}>/{maxScore}</span>
+              </div>
+              <div style={{ fontSize: 11.5, color: g.color, fontWeight: 700, marginTop: 3 }}>{g.dot} {g.label}</div>
+            </>
+          )}
         </div>
       </div>
 {st.chart && st.chart.length > 1 && (
@@ -1048,6 +1060,98 @@ function StockSignalCard({ st, idxStates, conf }) {
           </div>
         ))}
       </div>
+
+      {/* 다기간 추세 (장기/단기 분리 + 국면) */}
+      {st.multiTrend && (() => {
+        const mt = st.multiTrend;
+        const pc = mt.phaseColor === "up" ? C.up : mt.phaseColor === "down" ? C.down : C.dim;
+        const arrow = (d) => d > 0 ? "↑" : d < 0 ? "↓" : "→";
+        const acol = (d) => d > 0 ? C.up : d < 0 ? C.down : C.dim;
+        const ps = mt.periods;
+        const bars = [["5일", ps.d5], ["15일", ps.d15], ["30일", ps.d30], ["60일", ps.d60], ["90일", ps.d90]];
+        return (
+          <div style={{ marginTop: 12, padding: "11px 13px", background: C.panel2, borderRadius: 9 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: C.sub }}>다기간 추세 분석</span>
+              <span style={{ fontSize: 12, color: pc, fontWeight: 800 }}>{mt.phase}</span>
+            </div>
+            {/* 장기/단기 요약 */}
+            <div style={{ display: "flex", gap: 18, marginBottom: 10 }}>
+              <div style={{ fontSize: 11.5, color: C.sub }}>장기(120·200일) <b style={{ color: acol(mt.longDir) }}>{arrow(mt.longDir)} {mt.longPct > 0 ? "+" : ""}{mt.longPct}%</b></div>
+              <div style={{ fontSize: 11.5, color: C.sub }}>단기(5·15일) <b style={{ color: acol(mt.shortDir) }}>{arrow(mt.shortDir)} {mt.shortPct > 0 ? "+" : ""}{mt.shortPct}%</b></div>
+            </div>
+            {/* 기간별 막대 */}
+            <div style={{ display: "flex", gap: 6, alignItems: "flex-end", height: 40, marginBottom: 6 }}>
+              {bars.map(([lbl, v], i) => {
+                const h = Math.max(3, Math.min(38, Math.abs(v) * 1.6));
+                const col = v > 0.3 ? C.up : v < -0.3 ? C.down : C.dim;
+                return (
+                  <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
+                    <div style={{ width: "70%", height: h, background: col, borderRadius: 3, opacity: 0.85 }} />
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {bars.map(([lbl, v], i) => (
+                <div key={i} style={{ flex: 1, textAlign: "center", fontSize: 8.5, color: C.dim }}>{lbl}<br /><span style={{ color: v > 0.3 ? C.up : v < -0.3 ? C.down : C.dim }}>{v > 0 ? "+" : ""}{v}%</span></div>
+              ))}
+            </div>
+            <div style={{ fontSize: 9.5, color: C.dim, marginTop: 9, lineHeight: 1.5 }}>{mt.phaseDesc}</div>
+          </div>
+        );
+      })()}
+
+      {/* 추세채널 (C8 추세구조 · C9 채널위치 · C10 오버슈팅) */}
+      {st.channel && (() => {
+        const ch = st.channel;
+        const pos = ch.posPct;
+        // 위치 바: -20~140%를 0~100 좌표로
+        const barX = Math.max(0, Math.min(100, ((pos - (-20)) / (140 - (-20))) * 100));
+        const posColor = pos > 100 ? C.down : pos <= 35 ? C.up : C.amber;
+        const posLabel = pos > 100 ? "오버슈팅(과열)" : pos <= 35 ? "하단권(저평가)" : pos >= 65 ? "상단권(고평가)" : "중간";
+        return (
+          <div style={{ marginTop: 12, padding: "11px 13px", background: C.panel2, borderRadius: 9 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: C.sub }}>추세채널 분석 (최근 90일)</span>
+              <span style={{ fontSize: 11, color: ch.dir === "상승" ? C.up : ch.dir === "하락" ? C.down : C.dim, fontWeight: 700 }}>채널 {ch.dir} 추세</span>
+            </div>
+            {/* 채널 위치 바 */}
+            <div style={{ position: "relative", height: 8, borderRadius: 999, background: `linear-gradient(90deg, ${C.up}55, ${C.amber}55, ${C.down}55)`, marginBottom: 4 }}>
+              <div style={{ position: "absolute", left: `${barX}%`, top: -3, width: 3, height: 14, borderRadius: 2, background: posColor, transform: "translateX(-50%)" }} />
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 8.5, color: C.dim, marginBottom: 8 }}>
+              <span>하단(저평가)</span><span>중심</span><span>상단(고평가)</span>
+            </div>
+            <div style={{ fontSize: 11.5, color: C.sub, marginBottom: 8 }}>
+              현재 채널 위치 <b style={{ color: posColor }}>{pos}% · {posLabel}</b>
+              {ch.lowerNow != null && <span style={{ color: C.dim }}> (하단 ${ch.lowerNow} ~ 상단 ${ch.upperNow})</span>}
+            </div>
+            {/* C8~C10 */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "4px 10px", fontSize: 9, color: C.dim, lineHeight: 1.4 }}>
+              <div style={{ display: "flex", gap: 4 }}>
+                <span style={{ color: ch.c8 ? C.up : C.dim, fontWeight: 700 }}>{ch.c8 ? "✓" : "—"}C8</span>
+                <span>추세구조: 저점·고점 동시 상승</span>
+              </div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <span style={{ color: ch.c9 ? C.up : C.dim, fontWeight: 700 }}>{ch.c9 ? "✓" : "—"}C9</span>
+                <span>채널 하단권(저가 매수 유리)</span>
+              </div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <span style={{ color: ch.c10 ? C.down : C.dim, fontWeight: 700 }}>{ch.c10 ? "!" : "—"}C10</span>
+                <span>오버슈팅(상단 돌파·익절 주의)</span>
+              </div>
+            </div>
+            <div style={{ fontSize: 9.5, color: C.dim, marginTop: 8, lineHeight: 1.5 }}>
+              {ch.c8
+                ? (ch.c9 ? "상승 추세 + 채널 하단권 → 저가 매수 기회 구간입니다."
+                  : ch.c10 ? "상승 추세지만 채널 상단을 넘은 과열 상태 → 일부 익절·추격매수 주의."
+                  : "상승 추세 진행 중. 채널 하단 접근 시 분할 매수가 유리합니다.")
+                : "뚜렷한 상승 추세 구조가 아닙니다(저점·고점 동시 상승 미충족). 추세 매매보다 관망이 안전합니다."}
+            </div>
+          </div>
+        );
+      })()}
       <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.7, marginTop: 12, padding: "10px 12px", background: C.panel2, borderRadius: 9 }}>{st.note}</div>
 
       {/* 종목 실전 행동 (매수/보유/매도/손절) */}
@@ -1363,8 +1467,8 @@ export default function App() {
       return `실시간 분석 — ${parts.join(" · ")}.`;
     };
     Object.entries(live).forEach(([sym, d]) => {
-      if (analyzed[sym]) analyzed[sym] = { ...analyzed[sym], c: d.c, score: d.score, pull: d.pull, close: d.close, atr: d.atr, per: d.per, pbr: d.pbr, name: d.name || analyzed[sym].name, imminent: d.imminent, chart: d.chart, note: liveNote(d), analyzed: true, seedOnly: false, live: true };
-      else analyzed[sym] = { t: sym, sector: "기타", color: "#A6B0BE", c: d.c, score: d.score, pull: d.pull, close: d.close, atr: d.atr, per: d.per, pbr: d.pbr, name: d.name, imminent: d.imminent, chart: d.chart, note: liveNote(d), analyzed: true, seedOnly: false, live: true };
+      if (analyzed[sym]) analyzed[sym] = { ...analyzed[sym], c: d.c, score: d.score, pull: d.pull, close: d.close, atr: d.atr, per: d.per, pbr: d.pbr, name: d.name || analyzed[sym].name, imminent: d.imminent, chart: d.chart, combined: d.combined, channel: d.channel, multiTrend: d.multiTrend, note: liveNote(d), analyzed: true, seedOnly: false, live: true };
+      else analyzed[sym] = { t: sym, sector: "기타", color: "#A6B0BE", c: d.c, score: d.score, pull: d.pull, close: d.close, atr: d.atr, per: d.per, pbr: d.pbr, name: d.name, imminent: d.imminent, chart: d.chart, combined: d.combined, channel: d.channel, multiTrend: d.multiTrend, note: liveNote(d), analyzed: true, seedOnly: false, live: true };
     });
     // NDX100 전체를 기준으로 병합 (분석값 있으면 사용, 없으면 미분석)
     const merged = NDX100.map((m) => {
@@ -1733,8 +1837,11 @@ export default function App() {
                           </div>
                           <div style={{ display: "flex", gap: 12, marginTop: 4, fontSize: 11, color: C.sub, flexWrap: "wrap" }}>
                             {d.close != null && <span>현재가 <b style={{ color: C.text }}>${d.close.toLocaleString()}</b></span>}
-                            <span>점수 <b style={{ color: C.text }}>{d.score}/{d.c ? d.c.length : 7}</b></span>
+                            {d.combined
+                              ? <span>강도 <b style={{ color: C.text }}>{d.combined.strength}%</b> <span style={{ color: C.dim }}>({d.combined.plusCount}/{d.combined.totalFactors})</span></span>
+                              : <span>점수 <b style={{ color: C.text }}>{d.score}/{d.c ? d.c.length : 7}</b></span>}
                             {d.pull != null && <span>고점대비 {d.pull}%</span>}
+                            {d.multiTrend && <span style={{ color: d.multiTrend.phaseColor === "up" ? C.up : d.multiTrend.phaseColor === "down" ? C.down : C.dim }}>추세: {d.multiTrend.phase}</span>}
                           </div>
                           <div style={{ fontSize: 11.5, color: C.dim, marginTop: 6, lineHeight: 1.5 }}>{ta.reason}</div>
                           {ta.lvl && (
@@ -1856,6 +1963,12 @@ export default function App() {
                       <span style={{ color: s.dayChg >= 0 ? C.up : C.down }}>당일 {s.dayChg > 0 ? "+" : ""}{s.dayChg}%</span>
                       <span style={{ color: s.pull <= 0 ? C.down : C.up }}>고점대비 {s.pull > 0 ? "+" : ""}{s.pull}%</span>
                     </div>
+                    {(s.combined || s.multiTrend) && (
+                      <div style={{ display: "flex", gap: 14, fontSize: 10.5, color: C.dim, marginBottom: 10, flexWrap: "wrap" }}>
+                        {s.combined && <span>10팩터 강도 <b style={{ color: g.color }}>{s.combined.strength}%</b> ({s.combined.plusCount}/{s.combined.totalFactors})</span>}
+                        {s.multiTrend && <span>추세 <b style={{ color: s.multiTrend.phaseColor === "up" ? C.up : s.multiTrend.phaseColor === "down" ? C.down : C.dim }}>{s.multiTrend.phase}</b></span>}
+                      </div>
+                    )}
                     <div style={{ display: "grid", gridTemplateColumns: `repeat(${s.c.length},1fr)`, gap: 5 }}>
                       {s.c.map((v, j) => (
                         <div key={j} style={{ textAlign: "center", padding: "7px 1px", borderRadius: 7, background: v ? `${g.color}1A` : C.panel2, border: `1px solid ${v ? `${g.color}44` : C.line}` }}>
