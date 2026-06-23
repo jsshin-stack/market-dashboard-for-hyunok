@@ -271,6 +271,16 @@ const SECTOR_ETFS = [
   { sector: "금융&헬스케어", etf: "XLV", color: "#3DD68C" },
   { sector: "소비재", etf: "XLY", color: "#E0A93C" },
 ];
+// 나스닥100/레버리지 지수 ETF — 종목 검색·자동완성·백테스트에 노출
+const INDEX_ETFS = [
+  { t: "QQQ", n: "Invesco QQQ (나스닥100)", sec: "지수 ETF", px: 0 },
+  { t: "QLD", n: "ProShares Ultra QQQ (나스닥100 2배)", sec: "지수 ETF", px: 0 },
+  { t: "TQQQ", n: "ProShares UltraPro QQQ (나스닥100 3배)", sec: "지수 ETF", px: 0 },
+  { t: "SPY", n: "SPDR S&P 500", sec: "지수 ETF", px: 0 },
+  { t: "SSO", n: "ProShares Ultra S&P500 (2배)", sec: "지수 ETF", px: 0 },
+  { t: "UPRO", n: "ProShares UltraPro S&P500 (3배)", sec: "지수 ETF", px: 0 },
+  { t: "SOXL", n: "Direxion 반도체 3배", sec: "지수 ETF", px: 0 },
+];
 const NDX_TICKERS = new Set(NDX100.map((s) => s.t));
 
 /* === 매크로 이벤트 자동 생성 (오늘 기준 향후 30일, 오름차순) ===
@@ -807,7 +817,7 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
   let trades = 0, stops = 0, trails = 0, takes = 0, skipsRR = 0, skipsEarn = 0;
   let entryPx = 0, peakSinceEntry = 0;
   const equity = [];
-  let peak = capital, maxDD = 0;
+  let peak = 0, maxDD = 0;
 
   // 포지션 사이징: 점수 비율 높고 변동성 낮을수록 큰 비중(0.5~1.0)
   const sizeFor = (score, maxScore, vol) => {
@@ -848,16 +858,19 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
   let invested = 0;         // 현재 주식에 투입된 원금(매수 시 +금액, 매도 시 -비례원금)
   let avgCost = 0;          // 보유 주식 평균 매입가
   let realizedPnL = 0;      // 실현 손익 누적
+  let idleReserve = capital; // 아직 한 번도 투입 안 된 예비 현금(차트 자산가치에서 제외)
   const warm = Math.min(30, Math.floor(series.length / 5));
 
+  let cycleBase = capital;   // 현재 매수 사이클의 기준 자본(시작 시점 가용현금) — 재진입 시 갱신되어 복리 반영
   const buyPortion = (i, pct) => {
     const px = series[i].close;
-    const amt = Math.min(cash, capital0 * pct / 100);
+    const amt = Math.min(cash, cycleBase * pct / 100);
     if (amt <= 0) return;
     const newSh = amt / px;
     avgCost = (avgCost * shares + px * newSh) / (shares + newSh);  // 평단가 갱신
     shares += newSh; cash -= amt; invested += amt; trades++;
-    signals.push({ date: series[i].date, type: "buy", price: px, value: invested + shares * px - avgCost * shares });
+    idleReserve = Math.max(0, idleReserve - amt);  // 투입된 만큼 예비현금에서 차감(한번 투입되면 '내 전략 자금'으로 편입)
+    signals.push({ date: series[i].date, type: "buy", price: px, value: (cash - idleReserve) + shares * px });
   };
 
   for (let i = 0; i < series.length; i++) {
@@ -871,6 +884,7 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
         const sc = i >= warm ? scoreAt(series, i, idxSeries).score : -1;
         if (i >= warm && sc >= BT_PARAMS.entry) {
           inPos = true; entryPeak = px; peakSinceEntry = px; boughtLevels = {}; sellStage = 0;
+          cycleBase = cash;   // 이번 사이클 기준 자본 = 현재 가용 현금 전액(이전 사이클 수익 포함 → 복리)
           buyPortion(i, BT_PARAMS.buyLevels[0][1]); boughtLevels[0] = 1;
         }
       } else if (inPos) {
@@ -895,7 +909,7 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
           realizedPnL += (px - avgCost) * sellSh;  // 매도분 실현손익
           cash += sellSh * px; shares -= sellSh; invested -= soldCost; trades++; sellStage++;
           if (hardStop) trails++;
-          signals.push({ date: series[i].date, type: "sell", kind: hardStop ? "trail" : "signal", price: px, value: realizedPnL + invested + (px - avgCost) * shares });
+          signals.push({ date: series[i].date, type: "sell", kind: hardStop ? "trail" : "signal", price: px, value: (cash - idleReserve) + shares * px });
           if (sellStage >= BT_PARAMS.sellFraction || shares * px < capital0 * 0.01) {
             realizedPnL += (px - avgCost) * shares;
             cash += shares * px; invested = 0; shares = 0; inPos = false; sellStage = 0; avgCost = 0;  // 사이클 종료
@@ -903,15 +917,16 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
         }
       }
     }
-    // 차트값: 바이앤홀드는 총자산, 전략은 "주식에 들어간 돈의 가치"(미투입 현금 제외)
-    // = 보유주식 평가액 + 매도로 확정된 실현손익. 첫 진입액에서 시작, 분할매수분이 얹어짐.
+    // 차트값: 바이앤홀드는 총자산. 전략은 "전략에 투입된 자금의 현재 가치"
+    // = 보유주식 평가액 + (전체현금 - 미투입 예비현금). 첫 진입액에서 시작, 분할매수분이 얹어지고,
+    //   매도분은 현금으로 보존되어 0으로 떨어지지 않음.
     let dispVal;
     if (!strategyEnabled) {
       dispVal = cash + shares * px;
-    } else if (shares === 0 && realizedPnL === 0 && invested === 0) {
-      dispVal = null;  // 아직 미진입 → 나중에 첫 진입액으로 백필
+    } else if (shares === 0 && invested === 0 && idleReserve >= capital) {
+      dispVal = null;  // 아직 한 번도 진입 안 함 → 첫 진입액으로 백필
     } else {
-      dispVal = (shares * px) + realizedPnL;
+      dispVal = (cash - idleReserve) + shares * px;  // 투입된 전략 자금의 현재 가치
     }
     if (dispVal !== null) { peak = Math.max(peak, dispVal); maxDD = Math.max(maxDD, peak > 0 ? (peak - dispVal) / peak : 0); }
     equity.push({ date: series[i].date, value: dispVal === null ? null : +Math.max(0, dispVal).toFixed(0) });
@@ -922,13 +937,14 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
   for (let k = 0; k < equity.length; k++) { if (equity[k].value === null) equity[k].value = baseline; else break; }
   // 실제 총자산(현금+주식): 참고용
   const trueFinal = strategyEnabled ? (cash + shares * series[series.length - 1].close + realizedPnL) : equity[equity.length - 1].value;
-  // 차트·수익률 기준: "주식에 투입한 돈의 가치" (현금 제외). 카드 수치와 차트선이 일치.
+  // 차트선은 첫 진입액(예: 50%)에서 시작하지만, 수익률은 전체 투입가능자본(capital) 기준으로 계산
+  // → 바이앤홀드(전액 투자)와 같은 기준이라 공정 비교. "절반만 투자한 현실"이 수익률에 반영됨.
   const endVal = equity[equity.length - 1].value;
-  const base = strategyEnabled ? baseline : capital;
+  const base = capital;
   return {
     startPrice: start, endPrice: series[series.length - 1].close,
-    finalValue: endVal, profit: endVal - base,
-    retPct: base > 0 ? ((endVal - base) / base) * 100 : 0,
+    finalValue: +trueFinal.toFixed(0), profit: +(trueFinal - base).toFixed(0),
+    retPct: base > 0 ? ((trueFinal - base) / base) * 100 : 0,
     totalAsset: +trueFinal.toFixed(0),
     maxDD: maxDD * 100, trades, stops, trails, takes, skipsRR, skipsEarn, equity, signals,
   };
@@ -1562,6 +1578,17 @@ export default function App() {
     });
     Object.values(analyzed).forEach((a) => {
       if (!NDX_TICKERS.has(a.t)) merged.push(a);
+    });
+    // 지수 ETF(QQQ/QLD/TQQQ 등) — 이미 merged에 없으면 추가
+    const mergedTickers = new Set(merged.map((m) => m.t));
+    INDEX_ETFS.forEach((e) => {
+      if (mergedTickers.has(e.t)) return;
+      if (analyzed[e.t]) merged.push({ ...analyzed[e.t], name: e.n });
+      else merged.push({
+        t: e.t, name: e.n, sector: e.sec, color: "#5B9BF0",
+        pull: null, c: null, score: null, note: "지수 ETF — 직접 조회 또는 백테스트로 분석 가능합니다.",
+        analyzed: false, px: e.px,
+      });
     });
     return merged;
   }, [live]);
