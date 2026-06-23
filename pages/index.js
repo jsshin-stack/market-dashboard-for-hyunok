@@ -685,6 +685,7 @@ const BT_PARAMS = {
   // 분할 매수: [고점대비 하락%, 총자본 대비 매수 비중%]
   buyLevels: [[0, 50], [5, 10], [10, 20], [15, 20]],
   sellFraction: 3,   // 매도 시그널 시 1/N씩 분할 매도 (3 = 1/3)
+  sellGapPct: 3,     // 분할 매도 간격: 직전 매도가보다 이 %만큼 더 떨어져야 다음 분할 매도 (가짜 신호 회피 → 수익 극대화)
   useMACDBuy: true,  // 추가 분할매수 시 MACD 반등 확인(골든크로스 또는 히스토그램 상승)
 };
 
@@ -855,6 +856,7 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
   let entryPeak = 0;        // 매수 사이클의 고점(추가매수 기준)
   let boughtLevels = {};    // 이미 매수한 하락 단계
   let sellStage = 0;        // 분할 매도 진행 단계
+  let lastSellPx = 0;       // 직전 분할 매도가 (다음 분할은 이보다 sellGapPct% 더 떨어져야 실행)
   let invested = 0;         // 현재 주식에 투입된 원금(매수 시 +금액, 매도 시 -비례원금)
   let avgCost = 0;          // 보유 주식 평균 매입가
   let realizedPnL = 0;      // 실현 손익 누적
@@ -883,7 +885,7 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
         // (바이앤홀드는 시작일 100% 보유 기준, 전략은 신호 확인 후 진입 → 초기 변동 회피)
         const sc = i >= warm ? scoreAt(series, i, idxSeries).score : -1;
         if (i >= warm && sc >= BT_PARAMS.entry) {
-          inPos = true; entryPeak = px; peakSinceEntry = px; boughtLevels = {}; sellStage = 0;
+          inPos = true; entryPeak = px; peakSinceEntry = px; boughtLevels = {}; sellStage = 0; lastSellPx = 0;
           cycleBase = cash;   // 이번 사이클 기준 자본 = 현재 가용 현금 전액(이전 사이클 수익 포함 → 복리)
           buyPortion(i, BT_PARAMS.buyLevels[0][1]); boughtLevels[0] = 1;
         }
@@ -902,12 +904,16 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
         const { score: sc } = i >= warm ? scoreAt(series, i, idxSeries) : { score: 99 };
         const sigSell = i >= warm && longTrendBroken(series, i) && sc <= BT_PARAMS.exit;
         const hardStop = trailPct <= TRAIL;
-        if ((sigSell || hardStop) && shares > 0) {
+        // 분할 매도 간격: 직전 매도 후, 그 가격보다 sellGapPct% 더 떨어졌을 때만 다음 분할 매도
+        // (단, 추적손절은 안전장치이므로 간격 무시하고 즉시 실행)
+        const gapOK = lastSellPx === 0 || px <= lastSellPx * (1 - BT_PARAMS.sellGapPct / 100);
+        if (((sigSell && gapOK) || hardStop) && shares > 0) {
           const denom = Math.max(1, BT_PARAMS.sellFraction - sellStage);
           const sellSh = shares / denom;          // 1/3씩 분할 매도
           const soldCost = avgCost * sellSh;       // 매도분의 원금
           realizedPnL += (px - avgCost) * sellSh;  // 매도분 실현손익
           cash += sellSh * px; shares -= sellSh; invested -= soldCost; trades++; sellStage++;
+          lastSellPx = px;                          // 이번 매도가 기록
           if (hardStop) trails++;
           signals.push({ date: series[i].date, type: "sell", kind: hardStop ? "trail" : "signal", price: px, value: (cash - idleReserve) + shares * px });
           if (sellStage >= BT_PARAMS.sellFraction || shares * px < capital0 * 0.01) {
