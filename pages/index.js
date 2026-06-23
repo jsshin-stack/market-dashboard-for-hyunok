@@ -669,12 +669,38 @@ const BT_PARAMS = {
   c4k: 4,            // C4: 최근10일 변동폭 ≤ c4k×ATR
   c6burst: 1.3,      // C6: 돌파 거래량 ≥ c6burst×20일평균
   c6dry: 0.7,        // C6: 직전3일 거래량 < c6dry×50일평균
-  entry: 2,          // 진입: C점수 ≥ entry
-  exit: 0,           // 청산: C점수 ≤ exit
-  stop: -10,         // 손절 %
-  trail: -15,        // 추적손절 % (추세를 오래 타도록 여유)
-  take: 0,           // 익절 % (0=익절 안 함, 추세 끝까지 보유 → 큰 상승 포착)
+  entry: 2,          // 진입(재진입): C점수 ≥ entry
+  exit: 2,           // 청산 시그널: C점수 ≤ exit (장기추세 꺾임과 함께)
+  trail: -25,        // 추적손절 % (낙폭 방어 + 큰 추세 유지의 균형, 실데이터 검증값)
+  // 분할 매수: [고점대비 하락%, 총자본 대비 매수 비중%]
+  buyLevels: [[0, 50], [5, 10], [10, 20], [15, 20]],
+  sellFraction: 3,   // 매도 시그널 시 1/N씩 분할 매도 (3 = 1/3)
+  useMACDBuy: true,  // 추가 분할매수 시 MACD 반등 확인(골든크로스 또는 히스토그램 상승)
 };
+
+// MACD(12,26,9) 전체 시계열 계산
+function computeMACDSeries(series) {
+  const closes = series.map((d) => d.close);
+  const ema = (arr, n) => { const k = 2 / (n + 1); let e = arr[0]; const out = [e]; for (let i = 1; i < arr.length; i++) { e = arr[i] * k + e * (1 - k); out.push(e); } return out; };
+  const e12 = ema(closes, 12), e26 = ema(closes, 26);
+  const macd = closes.map((_, i) => e12[i] - e26[i]);
+  const sig = ema(macd, 9);
+  const hist = macd.map((m, i) => m - sig[i]);
+  return { macd, sig, hist };
+}
+// 장기 추세 꺾임: 120일·60일 종가 회귀 기울기가 모두 음수
+function longTrendBroken(series, idx) {
+  const slopeOf = (win) => {
+    const lo = Math.max(0, idx - win + 1);
+    const seg = series.slice(lo, idx + 1).map((d) => d.close);
+    const n = seg.length; if (n < 5) return 0;
+    let sx = 0, sy = 0, sxy = 0, sxx = 0;
+    for (let k = 0; k < n; k++) { sx += k; sy += seg[k]; sxy += k * seg[k]; sxx += k * k; }
+    const d = n * sxx - sx * sx; return d ? (n * sxy - sx * sy) / d : 0;
+  };
+  return slopeOf(120) < 0 && slopeOf(60) < 0;
+}
+
 
 function btATR(series, idx, n = 14) {
   if (idx < n) return null;
@@ -805,40 +831,67 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
     return idxSeries[j].close > ma;
   };
 
-  const STOP = BT_PARAMS.stop, TRAIL = BT_PARAMS.trail, TAKE = BT_PARAMS.take;
+  const TRAIL = BT_PARAMS.trail;
   const signals = [];   // 매수/매도 시점 기록 {date, type, price}
+
+  // 전략용 MACD 미리 계산
+  const MACD = strategyEnabled ? computeMACDSeries(series) : null;
+  const goldenCross = (i) => i > 0 && MACD.macd[i] > MACD.sig[i] && MACD.macd[i - 1] <= MACD.sig[i - 1];
+  const histUp = (i) => i > 0 && MACD.hist[i] > MACD.hist[i - 1];
+  const macdBuyOK = (i) => !BT_PARAMS.useMACDBuy || goldenCross(i) || histUp(i);
+
+  // 분할 상태
+  const capital0 = capital;
+  let entryPeak = 0;        // 매수 사이클의 고점(추가매수 기준)
+  let boughtLevels = {};    // 이미 매수한 하락 단계
+  let sellStage = 0;        // 분할 매도 진행 단계
+  const warm = Math.min(30, Math.floor(series.length / 5));
+
+  const buyPortion = (i, pct) => {
+    const px = series[i].close;
+    const amt = Math.min(cash, capital0 * pct / 100);
+    if (amt <= 0) return;
+    shares += amt / px; cash -= amt; trades++;
+    signals.push({ date: series[i].date, type: "buy", price: px, value: cash + shares * px });
+  };
 
   for (let i = 0; i < series.length; i++) {
     const px = series[i].close;
     if (!strategyEnabled) {
       if (i === 0) { shares = capital / px; cash = 0; inPos = true; }
     } else {
-      // 시작일 진입(초기 변동 반영). 워밍업은 지표 계산 최소치(30일)만 — 길면 매도 후 재매수가 막힘.
-      const warm = Math.min(30, Math.floor(series.length / 5));
-      if (i === 0) {
-        shares = capital / px; cash = 0; inPos = true; entryPx = px; peakSinceEntry = px;
-        signals.push({ date: series[i].date, type: "buy", price: px, value: capital });
-      } else {
-        const { score: sc } = i >= warm ? scoreAt(series, i, idxSeries) : { score: 99 };  // 워밍업중엔 보유 유지
-        if (!inPos) {
-          if (i >= warm && sc >= BT_PARAMS.entry) {
-            shares = cash / px; cash = 0; inPos = true; entryPx = px; peakSinceEntry = px; trades++;
-            signals.push({ date: series[i].date, type: "buy", price: px, value: shares * px });
+      if (!inPos && shares === 0) {
+        // 사이클 시작: 첫 진입도 매수 신호(C점수 ≥ entry)가 떠야 함. 시작일 강제매수 없음.
+        // (바이앤홀드는 시작일 100% 보유 기준, 전략은 신호 확인 후 진입 → 초기 변동 회피)
+        const sc = i >= warm ? scoreAt(series, i, idxSeries).score : -1;
+        if (i >= warm && sc >= BT_PARAMS.entry) {
+          inPos = true; entryPeak = px; peakSinceEntry = px; boughtLevels = {}; sellStage = 0;
+          buyPortion(i, BT_PARAMS.buyLevels[0][1]); boughtLevels[0] = 1;
+        }
+      } else if (inPos) {
+        entryPeak = Math.max(entryPeak, px);
+        peakSinceEntry = Math.max(peakSinceEntry, px);
+        const dropFromPeak = ((px - entryPeak) / entryPeak) * 100;
+        // 분할 매수: 고점 대비 하락 단계 도달 + MACD 반등 확인
+        BT_PARAMS.buyLevels.forEach(([lv, pct]) => {
+          if (lv > 0 && dropFromPeak <= -lv && !boughtLevels[lv] && cash > 0 && macdBuyOK(i)) {
+            buyPortion(i, pct); boughtLevels[lv] = 1;
           }
-        } else {
-          peakSinceEntry = Math.max(peakSinceEntry, px);
-          const lossPct = ((px - entryPx) / entryPx) * 100;
-          const trailPct = ((px - peakSinceEntry) / peakSinceEntry) * 100;
-          let exitKind = null;
-          if (lossPct <= STOP) { exitKind = "stop"; stops++; }
-          else if (trailPct <= TRAIL) { exitKind = "trail"; trails++; }
-          else if (TAKE > 0 && lossPct >= TAKE) { exitKind = "take"; takes++; }
-          else if (i >= warm && sc <= BT_PARAMS.exit) { exitKind = "signal"; }
-          if (exitKind) {
-            cash += shares * px; shares = 0; inPos = false; trades++;
-            signals.push({ date: series[i].date, type: "sell", kind: exitKind, price: px, value: cash });
+        });
+        // 매도 시그널: (장기추세 꺾임 AND C점수 ≤ exit) 또는 추적손절
+        const trailPct = ((px - peakSinceEntry) / peakSinceEntry) * 100;
+        const { score: sc } = i >= warm ? scoreAt(series, i, idxSeries) : { score: 99 };
+        const sigSell = i >= warm && longTrendBroken(series, i) && sc <= BT_PARAMS.exit;
+        const hardStop = trailPct <= TRAIL;
+        if ((sigSell || hardStop) && shares > 0) {
+          const denom = Math.max(1, BT_PARAMS.sellFraction - sellStage);
+          const sellSh = shares / denom;          // 1/3씩 분할 매도
+          cash += sellSh * px; shares -= sellSh; trades++; sellStage++;
+          if (hardStop) trails++;
+          signals.push({ date: series[i].date, type: "sell", kind: hardStop ? "trail" : "signal", price: px, value: cash + shares * px });
+          if (sellStage >= BT_PARAMS.sellFraction || shares * px < capital0 * 0.01) {
+            cash += shares * px; shares = 0; inPos = false; sellStage = 0;  // 사이클 종료
           }
-          // 그 외 보유 유지 → 시장 추종
         }
       }
     }
@@ -2271,10 +2324,14 @@ export default function App() {
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
-                  <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6, display: "flex", gap: 14, justifyContent: "center" }}>
-                    <span><span style={{ color: C.up }}>●</span> 매수 시점</span>
-                    <span><span style={{ color: C.down }}>●</span> 매도 시점(손절·추적·익절·신호)</span>
-                    <span>전략 매매 {btResult.strat.trades}회 · 손절 {btResult.strat.stops} · 추적 {btResult.strat.trails} · 익절 {btResult.strat.takes}</span>
+                  <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6, display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap" }}>
+                    <span><span style={{ color: C.up }}>●</span> 분할 매수</span>
+                    <span><span style={{ color: C.down }}>●</span> 분할 매도(추세꺾임/추적손절)</span>
+                    <span>총 {btResult.strat.trades}회 체결 (추적손절 {btResult.strat.trails})</span>
+                  </div>
+                  <div style={{ fontSize: 9.5, color: C.dim, marginTop: 4, textAlign: "center", lineHeight: 1.5 }}>
+                    전략: 진입 50% + 고점대비 −5/−10/−15% 분할매수(MACD 반등확인) · 추세꺾임+C≤2 또는 추적손절 −25%에서 1/3씩 분할매도.
+                    낙폭 방어 중심 — 강한 상승장에선 바이앤홀드가 더 유리할 수 있습니다.
                   </div>
                 </Card>
 
