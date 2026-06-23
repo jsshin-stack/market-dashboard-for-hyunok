@@ -47,6 +47,20 @@ export default async function handler(req, res) {
       const ago = s.closes[idx252];
       const roc12m = ago ? +(((close - ago) / ago) * 100).toFixed(1) : null;
       if (roc12m != null) { if (key === "NDX") out.confirm.rocNDX = roc12m; else out.confirm.rocSPX = roc12m; }
+      // vol20: 최근 20일 일간수익률의 연율화 변동성(%) — 강도·국면 판정에 사용
+      let vol20 = null;
+      if (s.closes.length >= 21) {
+        const rets = [];
+        for (let n = 0; n < 20; n++) {
+          const c0 = s.closes[n], c1 = s.closes[n + 1];
+          if (c0 != null && c1 != null && c1 !== 0) rets.push(c0 / c1 - 1);
+        }
+        if (rets.length >= 10) {
+          const m = rets.reduce((a, b) => a + b, 0) / rets.length;
+          const variance = rets.reduce((a, b) => a + (b - m) * (b - m), 0) / rets.length;
+          vol20 = +(Math.sqrt(variance) * Math.sqrt(252) * 100).toFixed(1);
+        }
+      }
       out.idx[key] = {
         close: +close.toFixed(2),
         asOf,
@@ -57,6 +71,7 @@ export default async function handler(req, res) {
         prevMonth: prevMonth != null ? +prevMonth.toFixed(2) : null,
         maVal: maVal != null ? +maVal.toFixed(2) : null,
         gapPct, slopePct, roc12m,
+        ...(vol20 != null ? { vol20 } : {}),
       };
     }
 
