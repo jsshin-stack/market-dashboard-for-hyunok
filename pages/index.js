@@ -845,14 +845,19 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
   let entryPeak = 0;        // 매수 사이클의 고점(추가매수 기준)
   let boughtLevels = {};    // 이미 매수한 하락 단계
   let sellStage = 0;        // 분할 매도 진행 단계
+  let invested = 0;         // 현재 주식에 투입된 원금(매수 시 +금액, 매도 시 -비례원금)
+  let avgCost = 0;          // 보유 주식 평균 매입가
+  let realizedPnL = 0;      // 실현 손익 누적
   const warm = Math.min(30, Math.floor(series.length / 5));
 
   const buyPortion = (i, pct) => {
     const px = series[i].close;
     const amt = Math.min(cash, capital0 * pct / 100);
     if (amt <= 0) return;
-    shares += amt / px; cash -= amt; trades++;
-    signals.push({ date: series[i].date, type: "buy", price: px, value: cash + shares * px });
+    const newSh = amt / px;
+    avgCost = (avgCost * shares + px * newSh) / (shares + newSh);  // 평단가 갱신
+    shares += newSh; cash -= amt; invested += amt; trades++;
+    signals.push({ date: series[i].date, type: "buy", price: px, value: invested + shares * px - avgCost * shares });
   };
 
   for (let i = 0; i < series.length; i++) {
@@ -886,25 +891,45 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
         if ((sigSell || hardStop) && shares > 0) {
           const denom = Math.max(1, BT_PARAMS.sellFraction - sellStage);
           const sellSh = shares / denom;          // 1/3씩 분할 매도
-          cash += sellSh * px; shares -= sellSh; trades++; sellStage++;
+          const soldCost = avgCost * sellSh;       // 매도분의 원금
+          realizedPnL += (px - avgCost) * sellSh;  // 매도분 실현손익
+          cash += sellSh * px; shares -= sellSh; invested -= soldCost; trades++; sellStage++;
           if (hardStop) trails++;
-          signals.push({ date: series[i].date, type: "sell", kind: hardStop ? "trail" : "signal", price: px, value: cash + shares * px });
+          signals.push({ date: series[i].date, type: "sell", kind: hardStop ? "trail" : "signal", price: px, value: realizedPnL + invested + (px - avgCost) * shares });
           if (sellStage >= BT_PARAMS.sellFraction || shares * px < capital0 * 0.01) {
-            cash += shares * px; shares = 0; inPos = false; sellStage = 0;  // 사이클 종료
+            realizedPnL += (px - avgCost) * shares;
+            cash += shares * px; invested = 0; shares = 0; inPos = false; sellStage = 0; avgCost = 0;  // 사이클 종료
           }
         }
       }
     }
-    const val = cash + shares * px;
-    peak = Math.max(peak, val);
-    maxDD = Math.max(maxDD, (peak - val) / peak);
-    equity.push({ date: series[i].date, value: +val.toFixed(0) });
+    // 차트값: 바이앤홀드는 총자산, 전략은 "주식에 들어간 돈의 가치"(미투입 현금 제외)
+    // = 보유주식 평가액 + 매도로 확정된 실현손익. 첫 진입액에서 시작, 분할매수분이 얹어짐.
+    let dispVal;
+    if (!strategyEnabled) {
+      dispVal = cash + shares * px;
+    } else if (shares === 0 && realizedPnL === 0 && invested === 0) {
+      dispVal = null;  // 아직 미진입 → 나중에 첫 진입액으로 백필
+    } else {
+      dispVal = (shares * px) + realizedPnL;
+    }
+    if (dispVal !== null) { peak = Math.max(peak, dispVal); maxDD = Math.max(maxDD, peak > 0 ? (peak - dispVal) / peak : 0); }
+    equity.push({ date: series[i].date, value: dispVal === null ? null : +Math.max(0, dispVal).toFixed(0) });
   }
+  // 진입 전 구간(null)은 첫 진입 시점의 값으로 백필 → 평평한 기준선
+  const firstReal = equity.find((e) => e.value !== null);
+  const baseline = firstReal ? firstReal.value : capital;
+  for (let k = 0; k < equity.length; k++) { if (equity[k].value === null) equity[k].value = baseline; else break; }
+  // 실제 총자산(현금+주식): 참고용
+  const trueFinal = strategyEnabled ? (cash + shares * series[series.length - 1].close + realizedPnL) : equity[equity.length - 1].value;
+  // 차트·수익률 기준: "주식에 투입한 돈의 가치" (현금 제외). 카드 수치와 차트선이 일치.
   const endVal = equity[equity.length - 1].value;
+  const base = strategyEnabled ? baseline : capital;
   return {
     startPrice: start, endPrice: series[series.length - 1].close,
-    finalValue: endVal, profit: endVal - capital,
-    retPct: ((endVal - capital) / capital) * 100,
+    finalValue: endVal, profit: endVal - base,
+    retPct: base > 0 ? ((endVal - base) / base) * 100 : 0,
+    totalAsset: +trueFinal.toFixed(0),
     maxDD: maxDD * 100, trades, stops, trails, takes, skipsRR, skipsEarn, equity, signals,
   };
 }
