@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import {
   TrendingUp, Activity, Layers, Calendar, Search, ShieldCheck,
   AlertTriangle, ChevronDown, ChevronUp, ChevronRight, Gauge, ArrowUpRight, ArrowDownRight, Minus, Target,
-  FlaskConical, Wallet, RefreshCw, Star,
+  FlaskConical, Wallet, RefreshCw, Star, Zap,
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 
@@ -818,7 +818,7 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
   let trades = 0, stops = 0, trails = 0, takes = 0, skipsRR = 0, skipsEarn = 0;
   let entryPx = 0, peakSinceEntry = 0;
   const equity = [];
-  let peak = 0, maxDD = 0;
+  let peak = capital, maxDD = 0;
 
   // 포지션 사이징: 점수 비율 높고 변동성 낮을수록 큰 비중(0.5~1.0)
   const sizeFor = (score, maxScore, vol) => {
@@ -872,7 +872,7 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
     avgCost = (avgCost * shares + px * newSh) / (shares + newSh);  // 평단가 갱신
     shares += newSh; cash -= amt; invested += amt; trades++;
     idleReserve = Math.max(0, idleReserve - amt);  // 투입된 만큼 예비현금에서 차감(한번 투입되면 '내 전략 자금'으로 편입)
-    signals.push({ date: series[i].date, type: "buy", price: px, value: (cash - idleReserve) + shares * px });
+    signals.push({ date: series[i].date, type: "buy", price: px, value: cash + shares * px });
   };
 
   for (let i = 0; i < series.length; i++) {
@@ -915,7 +915,7 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
           cash += sellSh * px; shares -= sellSh; invested -= soldCost; trades++; sellStage++;
           lastSellPx = px;                          // 이번 매도가 기록
           if (hardStop) trails++;
-          signals.push({ date: series[i].date, type: "sell", kind: hardStop ? "trail" : "signal", price: px, value: (cash - idleReserve) + shares * px });
+          signals.push({ date: series[i].date, type: "sell", kind: hardStop ? "trail" : "signal", price: px, value: cash + shares * px });
           if (sellStage >= BT_PARAMS.sellFraction || shares * px < capital0 * 0.01) {
             realizedPnL += (px - avgCost) * shares;
             cash += shares * px; invested = 0; shares = 0; inPos = false; sellStage = 0; avgCost = 0;  // 사이클 종료
@@ -923,28 +923,16 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
         }
       }
     }
-    // 차트값: 바이앤홀드는 총자산. 전략은 "전략에 투입된 자금의 현재 가치"
-    // = 보유주식 평가액 + (전체현금 - 미투입 예비현금). 첫 진입액에서 시작, 분할매수분이 얹어지고,
-    //   매도분은 현금으로 보존되어 0으로 떨어지지 않음.
-    let dispVal;
-    if (!strategyEnabled) {
-      dispVal = cash + shares * px;
-    } else if (shares === 0 && invested === 0 && idleReserve >= capital) {
-      dispVal = null;  // 아직 한 번도 진입 안 함 → 첫 진입액으로 백필
-    } else {
-      dispVal = (cash - idleReserve) + shares * px;  // 투입된 전략 자금의 현재 가치
-    }
-    if (dispVal !== null) { peak = Math.max(peak, dispVal); maxDD = Math.max(maxDD, peak > 0 ? (peak - dispVal) / peak : 0); }
-    equity.push({ date: series[i].date, value: dispVal === null ? null : +Math.max(0, dispVal).toFixed(0) });
+    // 차트값: 전략·바이앤홀드 모두 "총자산(현금 + 주식 평가액)".
+    // 분할 매수는 현금→주식 전환이라 총자산이 연속적 → 수직 점프 없음.
+    // 진입 전엔 현금 100%라 capital에서 평평하게 시작. 매도분도 현금으로 보존됨.
+    const dispVal = cash + shares * px;
+    peak = Math.max(peak, dispVal); maxDD = Math.max(maxDD, peak > 0 ? (peak - dispVal) / peak : 0);
+    equity.push({ date: series[i].date, value: +Math.max(0, dispVal).toFixed(0) });
   }
-  // 진입 전 구간(null)은 첫 진입 시점의 값으로 백필 → 평평한 기준선
-  const firstReal = equity.find((e) => e.value !== null);
-  const baseline = firstReal ? firstReal.value : capital;
-  for (let k = 0; k < equity.length; k++) { if (equity[k].value === null) equity[k].value = baseline; else break; }
-  // 실제 총자산(현금+주식): 참고용
-  const trueFinal = strategyEnabled ? (cash + shares * series[series.length - 1].close + realizedPnL) : equity[equity.length - 1].value;
-  // 차트선은 첫 진입액(예: 50%)에서 시작하지만, 수익률은 전체 투입가능자본(capital) 기준으로 계산
-  // → 바이앤홀드(전액 투자)와 같은 기준이라 공정 비교. "절반만 투자한 현실"이 수익률에 반영됨.
+  // 실제 총자산(현금+주식)
+  const trueFinal = cash + shares * series[series.length - 1].close;
+  // 수익률·낙폭: 전체 자본(capital) 기준 — 바이앤홀드와 동일 기준이라 공정 비교
   const endVal = equity[equity.length - 1].value;
   const base = capital;
   return {
@@ -953,6 +941,51 @@ function runBacktest(series, capital, meta, strategyEnabled, opts = {}) {
     retPct: base > 0 ? ((trueFinal - base) / base) * 100 : 0,
     totalAsset: +trueFinal.toFixed(0),
     maxDD: maxDD * 100, trades, stops, trails, takes, skipsRR, skipsEarn, equity, signals,
+  };
+}
+
+/* === 레버리지 타이밍 백테스트 ===
+   "종목을 2배로 추종하되, N일 이동평균선 위일 때만 보유하고 아래면 현금"
+   - 검증 결과 위험 대비 수익이 가장 좋았던 전략(QLD+200일타이밍의 일반화).
+   - leverage: 2 = 2배 ETF 모사. 비용: 운용비 0.9% + (L-1)*5% 차입이자(일할 차감).
+   - maPeriod: 추세 판단 이동평균(기본 200일). 느릴수록 휩쏘 적음.
+   - 주의: 단일 종목 레버리지는 변동성 끌림·갭하락 위험이 크고, 과거 강세장 결과가
+     미래에 재현된다는 보장이 없음(특히 개별주). 분산 지수(QQQ 등)일수록 안정적. */
+function runLevTiming(series, capital, opts = {}) {
+  if (series.length < 2) return null;
+  const L = opts.leverage || 2;
+  const maP = opts.maPeriod || 200;
+  const annualCost = 0.009 + (L - 1) * 0.05;
+  const dailyCost = annualCost / 252;
+  // 레버리지 가격 경로(비용 반영)
+  const lev = [series[0].close];
+  for (let i = 1; i < series.length; i++) {
+    const r = series[i].close / series[i - 1].close - 1;
+    lev.push(lev[i - 1] * (1 + L * r - dailyCost));
+  }
+  const maAt = (i) => {
+    if (i < maP - 1) return null;
+    let s = 0; for (let k = i - maP + 1; k <= i; k++) s += series[k].close;
+    return s / maP;
+  };
+  let cash = capital, units = 0;
+  let peak = capital, maxDD = 0, switches = 0;
+  const equity = [];
+  for (let i = 0; i < series.length; i++) {
+    const px = lev[i];
+    const ma = maAt(i);
+    const above = ma !== null && series[i].close > ma;
+    if (above && units === 0) { units = cash / px; cash = 0; switches++; }
+    else if (!above && units > 0) { cash += units * px; units = 0; switches++; }
+    const val = cash + units * px;
+    peak = Math.max(peak, val); maxDD = Math.max(maxDD, peak > 0 ? (peak - val) / peak : 0);
+    equity.push({ date: series[i].date, value: +Math.max(0, val).toFixed(0) });
+  }
+  const finalVal = cash + units * lev[lev.length - 1];
+  return {
+    finalValue: +finalVal.toFixed(0), profit: +(finalVal - capital).toFixed(0),
+    retPct: capital > 0 ? ((finalVal - capital) / capital) * 100 : 0,
+    maxDD: maxDD * 100, switches, leverage: L, maPeriod: maP, equity,
   };
 }
 
@@ -1388,6 +1421,29 @@ export default function App() {
       setOvMsg(`${tk} 조회 오류: ${e.message}`);
     } finally { setOvLoading(false); }
   }
+  // 베이스 스캔: 특정 종목의 현재가·풀백을 실시간으로 갱신
+  async function refreshScanPull(ticker) {
+    const tk = ticker.trim().toUpperCase();
+    if (!tk) return;
+    setScanLiveLoading((prev) => ({ ...prev, [tk]: true }));
+    try {
+      const resp = await fetch(`/api/quote?symbols=${encodeURIComponent(tk)}`);
+      const json = await resp.json();
+      const d = json && json.data && json.data[tk];
+      if (resp.ok && d && !d.error && d.pull != null) {
+        setScanLivePull((prev) => ({
+          ...prev,
+          [tk]: { pull: d.pull, px: d.close, at: d.asOf || "최신" },
+        }));
+      } else {
+        setScanLivePull((prev) => ({ ...prev, [tk]: { error: (d && d.error) || "조회 실패" } }));
+      }
+    } catch (e) {
+      setScanLivePull((prev) => ({ ...prev, [tk]: { error: e.message } }));
+    } finally {
+      setScanLiveLoading((prev) => ({ ...prev, [tk]: false }));
+    }
+  }
   // 백테스트 입력 상태 (기본: 오늘 기준 최근 1년)
   const [btTicker, setBtTicker] = useState("NVDA");
   const [btPicked, setBtPicked] = useState(true);   // 자동완성에서 선택했거나 초기값이면 목록 숨김
@@ -1400,6 +1456,8 @@ export default function App() {
   const todayISO = new Date().toISOString().slice(0, 10);   // 배포판: 실제 오늘
   // 실시간 갱신 상태
   const [live, setLive] = useState({});
+  const [scanLivePull, setScanLivePull] = useState({});   // 베이스 스캔: 종목별 실시간 풀백 {t: {pull, px, hi, at}}
+  const [scanLiveLoading, setScanLiveLoading] = useState({});  // 종목별 갱신 중 여부
   const [loading, setLoading] = useState(false);
   const [liveMsg, setLiveMsg] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -1655,18 +1713,21 @@ export default function App() {
     const btOpts = { idxSeries, earnings: meta.earnings };
     const hold = runBacktest(series, amt, meta, false);
     const strat = runBacktest(series, amt, meta, true, btOpts);
+    // 레버리지 타이밍(2배 + 200일선): 검증상 위험대비 수익 최강. 단일종목은 위험 큼.
+    const levTiming = runLevTiming(series, amt, { leverage: 2, maPeriod: 200 });
     const sigByDate = {};
     (strat.signals || []).forEach((s) => { sigByDate[s.date] = s; });
     const chart = series.map((p, i) => {
       const sig = sigByDate[p.date];
       return {
         date: p.date, "매수후보유": hold.equity[i].value, "전략": strat.equity[i].value,
+        "2배+200일": levTiming ? levTiming.equity[i].value : null,
         sigType: sig ? sig.type : null,           // "buy" | "sell" | null
         sigKind: sig ? (sig.kind || null) : null, // 매도 종류
         sigValue: sig ? strat.equity[i].value : null,
       };
     });
-    setBtResult({ tk, meta, amt, series, hold, strat, chart, isReal: source === "실제 API", source });
+    setBtResult({ tk, meta, amt, series, hold, strat, levTiming, chart, isReal: source === "실제 API", source });
   };
 
   return (
@@ -2132,10 +2193,36 @@ export default function App() {
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <div style={{ fontSize: 11, color: C.dim, width: 22, textAlign: "center", fontVariantNumeric: "tabular-nums" }}>{i + 1}</div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
                         <b style={{ fontSize: 14.5 }}>{st.t}</b>
                         <span style={{ fontSize: 10.5, color: st.color }}>{st.sector}</span>
-                        <span style={{ fontSize: 11, color: st.pull <= 0 ? C.down : C.up, fontVariantNumeric: "tabular-nums" }}>풀백 {st.pull > 0 ? "+" : ""}{st.pull}%</span>
+                        {(() => {
+                          const lp = scanLivePull[st.t];
+                          const showPull = lp && lp.pull != null ? lp.pull : st.pull;
+                          const isLive = lp && lp.pull != null;
+                          return (
+                            <>
+                              <span style={{ fontSize: 11, color: showPull <= 0 ? C.down : C.up, fontVariantNumeric: "tabular-nums" }}>
+                                풀백 {showPull > 0 ? "+" : ""}{showPull}%
+                              </span>
+                              {isLive && (
+                                <span style={{ fontSize: 9.5, color: C.up, background: `${C.up}1A`, padding: "1px 6px", borderRadius: 999 }}>
+                                  실시간 ${lp.px} ({lp.at})
+                                </span>
+                              )}
+                              {lp && lp.error && (
+                                <span style={{ fontSize: 9.5, color: C.down }}>갱신 실패</span>
+                              )}
+                              <button
+                                onClick={() => refreshScanPull(st.t)}
+                                disabled={scanLiveLoading[st.t]}
+                                style={{ fontSize: 9.5, color: C.sub, background: "transparent", border: `1px solid ${C.line}`, borderRadius: 999, padding: "1px 8px", cursor: scanLiveLoading[st.t] ? "default" : "pointer" }}
+                              >
+                                {scanLiveLoading[st.t] ? "갱신 중…" : "↻ 실시간"}
+                              </button>
+                            </>
+                          );
+                        })()}
                       </div>
                       <div style={{ fontSize: 11.5, color: C.sub, marginTop: 3, lineHeight: 1.5 }}>{st.note}</div>
                     </div>
@@ -2297,11 +2384,12 @@ export default function App() {
 
             {btResult && (
               <>
-                {/* 요약 카드 2개 */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+                {/* 요약 카드 (레버리지 타이밍 포함 시 3개) */}
+                <div style={{ display: "grid", gridTemplateColumns: btResult.levTiming ? "1fr 1fr 1fr" : "1fr 1fr", gap: 10, marginBottom: 12 }}>
                   {[
                     { key: "hold", title: "매수 후 보유", icon: Wallet, sub: "시작일 전액 매수 → 보유", r: btResult.hold, accent: C.blue },
                     { key: "strat", title: "전략 매매", icon: Target, sub: "C1~C5 점수: 4점↑매수·2점↓매도", r: btResult.strat, accent: C.brass },
+                    ...(btResult.levTiming ? [{ key: "lev", title: "2배+200일선", icon: Zap, sub: "200일선 위에서만 2배 보유", r: btResult.levTiming, accent: C.violet }] : []),
                   ].map((b) => {
                     const up = b.r.profit >= 0;
                     const Icon = b.icon;
@@ -2317,11 +2405,16 @@ export default function App() {
                           {up ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}{up ? "+" : ""}{b.r.retPct.toFixed(1)}% ({up ? "+" : ""}${b.r.profit.toLocaleString(undefined, { maximumFractionDigits: 0 })})
                         </div>
                         <div style={{ fontSize: 10, color: C.dim, marginTop: 8, lineHeight: 1.5 }}>
-                          최대낙폭 {b.r.maxDD.toFixed(1)}%{b.key === "strat" ? ` · 매매 ${b.r.trades}회` : ""}
+                          최대낙폭 {b.r.maxDD.toFixed(1)}%{b.key === "strat" ? ` · 매매 ${b.r.trades}회` : ""}{b.key === "lev" ? ` · 전환 ${b.r.switches}회` : ""}
                           {b.key === "strat" && (
                             <div style={{ marginTop: 3, fontSize: 9, color: C.dim, lineHeight: 1.5 }}>
                               손절 {b.r.stops || 0} · 추적손절 {b.r.trails || 0} · 익절 {b.r.takes || 0}
                               {(b.r.skipsRR || b.r.skipsEarn) ? ` · 진입거름(손익비 ${b.r.skipsRR || 0}/실적 ${b.r.skipsEarn || 0})` : ""}
+                            </div>
+                          )}
+                          {b.key === "lev" && (
+                            <div style={{ marginTop: 3, fontSize: 9, color: C.amber, lineHeight: 1.5 }}>
+                              ⚠ 레버리지·단일종목 위험 큼 (참고용)
                             </div>
                           )}
                         </div>
@@ -2367,6 +2460,9 @@ export default function App() {
                           labelStyle={{ color: C.sub }} formatter={(v) => `$${Number(v).toLocaleString()}`} />
                         <Legend wrapperStyle={{ fontSize: 11 }} />
                         <Line type="monotone" dataKey="매수후보유" stroke={C.blue} dot={false} strokeWidth={2} />
+                        {btResult.levTiming && (
+                          <Line type="monotone" dataKey="2배+200일" stroke={C.violet} dot={false} strokeWidth={1.7} strokeDasharray="5 3" />
+                        )}
                         <Line type="monotone" dataKey="전략" stroke={C.brass} strokeWidth={2}
                           dot={(props) => {
                             const { cx, cy, payload } = props;
@@ -2385,11 +2481,17 @@ export default function App() {
                   <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6, display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap" }}>
                     <span><span style={{ color: C.up }}>●</span> 분할 매수</span>
                     <span><span style={{ color: C.down }}>●</span> 분할 매도(추세꺾임/추적손절)</span>
+                    {btResult.levTiming && <span><span style={{ color: C.violet }}>┄</span> 2배+200일선</span>}
                     <span>총 {btResult.strat.trades}회 체결 (추적손절 {btResult.strat.trails})</span>
                   </div>
                   <div style={{ fontSize: 9.5, color: C.dim, marginTop: 4, textAlign: "center", lineHeight: 1.5 }}>
                     전략: 진입 50% + 고점대비 −5/−10/−15% 분할매수(MACD 반등확인) · 추세꺾임+C≤2 또는 추적손절 −25%에서 1/3씩 분할매도.
                     낙폭 방어 중심 — 강한 상승장에선 바이앤홀드가 더 유리할 수 있습니다.
+                    {btResult.levTiming && (
+                      <div style={{ marginTop: 4, color: C.amber }}>
+                        2배+200일선: 종목을 2배로 추종하되 200일 이동평균선 위에서만 보유(아래면 현금). 백테스트상 위험대비 수익이 좋았으나, 단일 종목 레버리지는 변동성 끌림·갭하락 위험이 크고 과거 강세장 결과가 미래에 재현된다는 보장이 없습니다. 참고용입니다.
+                      </div>
+                    )}
                   </div>
                 </Card>
 
