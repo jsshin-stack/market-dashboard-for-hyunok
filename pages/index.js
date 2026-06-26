@@ -1555,12 +1555,12 @@ export default function App() {
   async function triggerFullRefresh() {
     if (collecting) return;
     setCollecting(true);
-    setLiveMsg("전체 종목 수집 중… (약 1~2분 소요, 완료까지 기다려 주세요)");
+    setLiveMsg("새로고침 중… 종목·지수·지표를 갱신합니다 (약 1~2분, 완료까지 기다려 주세요)");
     try {
       const r = await fetch("/api/trigger-refresh");
       const j = await r.json();
       if (j.ok) {
-        setLiveMsg(`수집 완료 · 종목 ${j.have || "?"}개 · 기준 ${j.asOf || "최신"} · 화면을 새로고침하면 반영됩니다`);
+        setLiveMsg(`갱신 완료 · 종목 ${j.have || "?"}개 · 지수·지표 동기화됨 · 기준 ${j.asOf || "최신"}`);
         // 수집 직후 스냅샷을 다시 불러와 화면에 즉시 반영
         try {
           const sr = await fetch("/api/snapshot");
@@ -1907,24 +1907,13 @@ export default function App() {
             <button
               onClick={() => triggerFullRefresh()}
               disabled={collecting}
-              title="S&P500 포함 전체 종목을 지금 새로 수집(약 1~2분)"
+              title="종목·지수·지표를 한 번에 새로 수집(약 1~2분)"
               style={{
-                display: "flex", alignItems: "center", gap: 6, padding: "9px 13px", borderRadius: 10, cursor: collecting ? "wait" : "pointer",
-                background: collecting ? C.line : C.panel2, color: collecting ? C.sub : C.brass, border: `1px solid ${C.brass}66`, fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap",
+                display: "flex", alignItems: "center", gap: 6, padding: "9px 15px", borderRadius: 10, cursor: collecting ? "wait" : "pointer",
+                background: collecting ? C.line : C.brass, color: collecting ? C.sub : C.bg, border: "none", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap",
               }}
             >
-              <RefreshCw size={14} style={collecting ? { animation: "spin 1s linear infinite" } : undefined} /> {collecting ? "수집 중…" : "전체 종목 수집"}
-            </button>
-            <button
-              onClick={() => refreshLive()}
-              disabled={loading}
-              title="지수·확인지표를 최신으로 갱신"
-              style={{
-                display: "flex", alignItems: "center", gap: 6, padding: "9px 13px", borderRadius: 10, cursor: loading ? "wait" : "pointer",
-                background: loading ? C.line : C.brass, color: loading ? C.sub : C.bg, border: "none", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap",
-              }}
-            >
-              <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> {loading ? "갱신 중…" : "지수·지표 갱신"}
+              <RefreshCw size={14} style={collecting ? { animation: "spin 1s linear infinite" } : undefined} /> {collecting ? "갱신 중…" : "새로고침"}
             </button>
           </div>
         </div>
@@ -1936,7 +1925,7 @@ export default function App() {
         <div style={{ fontSize: 10.5, color: liveMsg.includes("실패") ? C.down : C.dim, marginBottom: 18, lineHeight: 1.5, padding: "8px 11px", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           {liveMsg
             ? <>↻ {liveMsg}</>
-            : <>↻ <b style={{ color: C.sub }}>지수·지표 갱신</b>: 지수(QQQ·SPY)와 확인지표(VIX·HYG·12M ROC)를 실시간으로 다시 불러옵니다(수초). <b style={{ color: C.brass }}>전체 종목 수집</b>: S&P500 포함 약 270개 종목을 지금 새로 수집합니다(1~2분). 평소엔 매일 자동 수집분을 사용해요.</>}
+            : <>↻ <b style={{ color: C.brass }}>새로고침</b>: S&P500 포함 약 270개 종목과 지수·지표(QQQ·SPY·VIX·HYG)를 한 번에 같은 시점으로 갱신합니다(1~2분). 평소엔 매일 자동 수집분을 사용해요.</>}
         </div>
         <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
