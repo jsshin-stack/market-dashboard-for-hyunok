@@ -22,11 +22,12 @@ export default async function handler(req, res) {
     const out = { ok: true, idx: {}, confirm: {} };
 
     // --- 지수 2종: 인덱스 심볼 우선, 실패 시 ETF 프록시로 폴백 ---
-    // 무료 플랜에서 인덱스(NDX/SPX) 접근이 막히면 QQQ(나스닥100)·SPY(S&P500)로 대체.
-    // 단, 프록시 사용 시 지수 카드의 기존 종가 스케일과 달라지므로 gap%/slope%만 의미가 있음.
+    // 지수 표시는 항상 QQQ(나스닥100)·SPY(S&P500)로 통일한다.
+    // 무료 플랜에서 NDX/SPX 직접 접근이 자주 막혀 종가 스케일이 들쭉날쭉해지는 문제를
+    // 막기 위해, 처음부터 안정적으로 접근 가능한 ETF로 고정. gap%/slope%/ROC는 동일하게 유효.
     const idxPlan = [
-      { key: "NDX", syms: ["NDX", "QQQ"], maWin: 200 },
-      { key: "SPX", syms: ["SPX", "GSPC", "SPY"], maWin: 200 },
+      { key: "NDX", syms: ["QQQ"], maWin: 200 },
+      { key: "SPX", syms: ["SPY"], maWin: 200 },
     ];
     for (const { key, syms, maWin } of idxPlan) {
       let s = null, usedSym = null;
@@ -65,7 +66,7 @@ export default async function handler(req, res) {
         close: +close.toFixed(2),
         asOf,
         source: usedSym,
-        isProxy: usedSym !== key && usedSym !== "GSPC",
+        isProxy: false,   // QQQ/SPY가 정식 표시 기준 — 프록시 라벨 불필요
         prevDay: prevDay != null ? +prevDay.toFixed(2) : null,
         prevWeek: prevWeek != null ? +prevWeek.toFixed(2) : null,
         prevMonth: prevMonth != null ? +prevMonth.toFixed(2) : null,
