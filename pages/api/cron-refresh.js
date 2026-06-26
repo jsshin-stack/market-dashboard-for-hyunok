@@ -16,7 +16,26 @@ const redis = Redis.fromEnv();
 const NDX_TICKERS = ["NVDA","GOOG","GOOGL","AAPL","MSFT","AMZN","AVGO","TSLA","META","MU","WMT","AMD","ASML","INTC","CSCO","COST","LRCX","ARM","PLTR","AMAT","NFLX","TXN","QCOM","KLAC","LIN","PANW","ADI","STX","TMUS","PEP","APP","WDC","AMGN","CRWD","MRVL","GILD","ISRG","SHOP","HON","BKNG","PDD","SBUX","VRTX","CEG","CDNS","MAR","ADBE","FTNT","SNPS","CMCSA","ADP","INTU","MELI","MNST","CSX","NXPI","DDOG","MPWR","ABNB","MDLZ","ROST","ORLY","DASH","AEP","CTAS","WBD","BKR","REGN","PCAR","FANG","MSTR","MCHP","FAST","EA","XEL","FER","ODFL","EXC","ADSK","IDXX","TTWO","CCEP","KDP","ALNY","PYPL","TRI","PAYX","AXON","WDAY","ROP","CPRT","KHC","GEHC","DXCM","CTSH","TEAM","INSM","VRSK","ZS","CHTR","CSGP"];
 const SPX_EXTRA = ["JPM","V","MA","UNH","HD","PG","JNJ","XOM","BAC","LLY","GE","NOW","ORCL","CRM"];
 const SECTOR_ETFS = ["SOXX","XLK","IGV","XLV","XLY"];
-const ALL = [...new Set([...NDX_TICKERS, ...SPX_EXTRA, ...SECTOR_ETFS])];
+// S&P500 확장분 — Yahoo Finance로 수집(키 불필요). 가치주·중소형주·경기민감주 등
+// 기존 NDX/성장주 목록에 없던 종목들. 200일선 돌파 발굴 범위를 넓히기 위함.
+const SP500_EXTRA = [
+  // 금융
+  "WFC","GS","MS","C","AXP","SCHW","BLK","SPGI","CB","MMC","PGR","AON","ICE","CME","USB","PNC","TFC","COF","BK","AIG","MET","PRU","ALL","TRV","AFL","GNW",
+  // 산업·운송
+  "CAT","DE","UNP","UPS","BA","LMT","RTX","GD","NOC","MMM","EMR","ETN","ITW","PH","CMI","GWW","RHI","PCAR","CSX","NSC","FDX","WM","RSG","PWR","URI",
+  // 헬스케어(추가)
+  "ABBV","MRK","PFE","TMO","ABT","DHR","BMY","AMGN","MDT","CI","CVS","ELV","HUM","ZTS","BSX","SYK","BDX","HCA","CNC","MCK",
+  // 소비재·유통
+  "KO","PEP","PG","MCD","NKE","SBUX","TGT","LOW","TJX","DG","DLTR","M","KSS","BBY","YUM","CMG","MAR","HLT","EL","CL","KMB","GIS","K","HSY","KR",
+  // 에너지·소재
+  "XOM","CVX","COP","SLB","EOG","MPC","PSX","VLO","OXY","KMI","WMB","LNG","NEM","FCX","DOW","DD","APD","LIN","SHW","NUE","AMCR","BALL","IP","CF",
+  // 통신·유틸리티·부동산
+  "T","VZ","TMUS","DUK","SO","D","NEE","AEP","EXC","SRE","PLD","AMT","CCI","EQIX","SPG","O","PSA","WELL",
+  // 기타 대형
+  "BRK.B","DIS","CMCSA","ORCL","IBM","ACN","TXN","INTC","HD","UNH","JPM","BAC","MA","V",
+];
+const ALL = [...new Set([...NDX_TICKERS, ...SPX_EXTRA, ...SECTOR_ETFS, ...SP500_EXTRA])];
+// 전 종목 Yahoo로 수집(키 불필요). Twelve Data는 지수(QQQ/SPY)·폴백용으로만 사용.
 
 // 이벤트 키워드(영문) — 생성되는 이벤트 이름과 매칭
 const EVENT_KEYWORDS = {
@@ -78,6 +97,62 @@ async function timeSeries(symbol, key, size = 260) {
   const d = await r.json();
   if (d.status === "error" || !d.values) return null;
   return d.values;
+}
+
+// ── Yahoo Finance 시계열 (키 불필요) ───────────────────────────
+// query1.finance.yahoo.com 의 공개 chart 엔드포인트 사용.
+// Twelve Data와 동일한 형식({datetime, open, high, low, close, volume}, 최신순)으로 변환해 반환.
+// 비공식 경로이므로 실패 시 null 반환 → 호출부에서 다른 소스로 폴백 가능.
+async function timeSeriesYahoo(symbol, size = 260) {
+  try {
+    // Yahoo는 클래스주 티커에 하이픈 사용(BRK.B → BRK-B)
+    const ySym = symbol.replace(/\./g, "-");
+    // range는 넉넉히 받아 200일선 워밍업까지 커버(약 1년)
+    const range = size > 240 ? "2y" : "1y";
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ySym)}?range=${range}&interval=1d`;
+    const r = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; market-dashboard/1.0)" },
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const result = d && d.chart && d.chart.result && d.chart.result[0];
+    if (!result || !result.timestamp || !result.indicators) return null;
+    const ts = result.timestamp;
+    const q = result.indicators.quote && result.indicators.quote[0];
+    if (!q) return null;
+    const out = [];
+    for (let i = 0; i < ts.length; i++) {
+      const c = q.close ? q.close[i] : null;
+      if (c == null) continue;   // 휴장일 등 null 스킵
+      const dt = new Date(ts[i] * 1000).toISOString().slice(0, 10);
+      out.push({
+        datetime: dt,
+        open: q.open && q.open[i] != null ? String(q.open[i]) : String(c),
+        high: q.high && q.high[i] != null ? String(q.high[i]) : String(c),
+        low: q.low && q.low[i] != null ? String(q.low[i]) : String(c),
+        close: String(c),
+        volume: q.volume && q.volume[i] != null ? String(q.volume[i]) : "0",
+      });
+    }
+    if (out.length < 60) return null;   // 데이터 너무 적으면 실패 처리
+    // Yahoo는 과거→최신 순서라 뒤집어서 최신순으로 맞춤(Twelve Data와 동일)
+    out.reverse();
+    return out.slice(0, size);
+  } catch (e) {
+    return null;
+  }
+}
+
+// 종목 시계열 통합 진입점: 소스에 따라 분기.
+// source="yahoo"면 Yahoo 우선, 실패 시 Twelve Data 폴백. 그 외엔 Twelve Data.
+async function fetchSeries(symbol, key, size, source) {
+  if (source === "yahoo") {
+    const y = await timeSeriesYahoo(symbol, size);
+    if (y) return y;
+    // Yahoo 실패 시 Twelve Data로 폴백(키 있을 때만)
+    return key ? await timeSeries(symbol, key, size) : null;
+  }
+  return await timeSeries(symbol, key, size);
 }
 
 // 한 종목의 원시 지표+점수 계산 (C7 백분위는 나중에 종목군 전체로 후처리).
@@ -166,29 +241,22 @@ export default async function handler(req, res) {
 
     // 아직 안 받은 종목만 추려서 이번 호출 분(CHUNK)만 수집
     const remaining = ALL.filter((s) => !stocks[s]);
-    const todo = remaining.slice(0, CHUNK);
-    let ok = 0, fail = 0, aborted = false;
-    for (let i = 0; i < todo.length; i += 6) {
-      const batch = todo.slice(i, i + 6);
-      let batchOk = 0;
+    // 전 종목 Yahoo로 통일 수집(키 불필요, 한도 넉넉 → 하루 1회 cron으로 전부 수집).
+    // Yahoo 실패 시 fetchSeries 내부에서 Twelve Data로 폴백(안전망).
+    // maxDuration 300초 내 안전: 270개 ÷ 12 ≈ 23배치 × (요청 1~2초 + 텀 0.8초) ≈ 1~1.5분.
+    let ok = 0, fail = 0;
+    for (let i = 0; i < remaining.length; i += 12) {
+      const batch = remaining.slice(i, i + 12);
       await Promise.all(batch.map(async (sym) => {
         try {
-          const vals = await timeSeries(sym, key, 260);
-          if (vals) { stocks[sym] = computeScore(vals, idxRef); ok++; batchOk++; }
+          const vals = await fetchSeries(sym, key, 260, "yahoo");
+          if (vals) { stocks[sym] = computeScore(vals, idxRef); ok++; }
           else fail++;
         } catch (e) { fail++; }
       }));
-      // 첫 배치가 전부 실패하면 한도 초과 상태로 보고 즉시 중단(다음 배치 62초 대기 안 함)
-      if (i === 0 && batchOk === 0) { aborted = true; break; }
-      if (i + 6 < todo.length) await sleep(62000);
+      if (i + 12 < remaining.length) await sleep(800);   // 과도한 요청 방지용 짧은 텀
     }
-    if (aborted) {
-      return res.status(200).json({
-        ok: false, skipped: true,
-        reason: "종목 수집 첫 배치 전부 실패 → 한도 초과 추정. 이번 호출 중단(한도 보호).",
-        have: ALL.filter((s) => stocks[s]).length, total: ALL.length,
-      });
-    }
+    // 수집 완료. (Yahoo 우선 + Twelve 폴백이라 한도 초과로 전체가 멈추는 일은 없음)
 
     // 지수/확인지표 + 이벤트는 매 호출 갱신(가벼움)
     const macro = await buildMacro(key, idxRef);

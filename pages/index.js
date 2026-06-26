@@ -1489,6 +1489,44 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [liveMsg, setLiveMsg] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [collecting, setCollecting] = useState(false);   // 전체 종목 수집 중 여부
+
+  // 전체 종목 수집을 즉시 트리거(버튼). 서버가 secret을 붙여 cron-refresh를 호출.
+  async function triggerFullRefresh() {
+    if (collecting) return;
+    setCollecting(true);
+    setLiveMsg("전체 종목 수집 중… (약 1~2분 소요, 완료까지 기다려 주세요)");
+    try {
+      const r = await fetch("/api/trigger-refresh");
+      const j = await r.json();
+      if (j.ok) {
+        setLiveMsg(`수집 완료 · 종목 ${j.have || "?"}개 · 기준 ${j.asOf || "최신"} · 화면을 새로고침하면 반영됩니다`);
+        // 수집 직후 스냅샷을 다시 불러와 화면에 즉시 반영
+        try {
+          const sr = await fetch("/api/snapshot");
+          const sj = await sr.json();
+          if (sj.ok && sj.stocks) {
+            setLive(sj.stocks);
+            const sec = {};
+            SECTOR_ETFS.forEach(({ sector, etf, color }) => {
+              if (sj.stocks[etf]) sec[sector] = { sector, etf, color, ...sj.stocks[etf] };
+            });
+            if (Object.keys(sec).length) setSectorLive(sec);
+            if (sj.macro && sj.macro.idx) setLiveIdx(sj.macro.idx);
+            if (sj.macro && sj.macro.confirm) setLiveConf(sj.macro.confirm);
+            if (sj.asOf) setAsOfDate(sj.asOf);
+            if (sj.updatedAt) setLastUpdated(new Date(sj.updatedAt));
+          }
+        } catch (e) { /* 스냅샷 재로드 실패는 무시 */ }
+      } else {
+        setLiveMsg("수집 실패: " + (j.message || "알 수 없는 오류"));
+      }
+    } catch (e) {
+      setLiveMsg("수집 실패: " + e.message);
+    } finally {
+      setCollecting(false);
+    }
+  }
   const [asOfDate, setAsOfDate] = useState(null);
   const [liveIdx, setLiveIdx] = useState(null);
   const [liveConf, setLiveConf] = useState(null);
@@ -1630,7 +1668,7 @@ export default function App() {
           setLastUpdated(new Date(j.updatedAt));
           const cnt = j.stockCount || Object.keys(j.stocks || {}).length;
           setLiveMsg(j.complete === false
-            ? `자동 수집 진행 중 · ${cnt}/110 종목 (나머지는 순차 수집됨) · 기준 ${j.asOf || "최신"}`
+            ? `자동 수집 진행 중 · ${cnt}개 종목 수집됨 (나머지는 순차 수집) · 기준 ${j.asOf || "최신"}`
             : `자동 수집분 로드됨 · 종목 ${cnt}개 · 기준 ${j.asOf || "최신"}`);
         }
       } catch (e) { /* 스냅샷 없으면 예시 데이터로 시작 */ }
@@ -1806,17 +1844,30 @@ export default function App() {
             <div style={{ fontSize: 11, letterSpacing: "0.2em", color: C.brass, textTransform: "uppercase" }}>Market Trend Terminal</div>
             <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: "-0.02em" }}>시장 추세 분석 대시보드</h1>
           </div>
-          <button
-            onClick={() => refreshLive()}
-            disabled={loading}
-            title="지수·확인지표를 최신으로 갱신"
-            style={{
-              display: "flex", alignItems: "center", gap: 6, padding: "9px 13px", borderRadius: 10, cursor: loading ? "wait" : "pointer",
-              background: loading ? C.line : C.brass, color: loading ? C.sub : C.bg, border: "none", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap",
-            }}
-          >
-            <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> {loading ? "갱신 중…" : "지수·지표 갱신"}
-          </button>
+          <div style={{ display: "flex", gap: 7, flexShrink: 0 }}>
+            <button
+              onClick={() => triggerFullRefresh()}
+              disabled={collecting}
+              title="S&P500 포함 전체 종목을 지금 새로 수집(약 1~2분)"
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "9px 13px", borderRadius: 10, cursor: collecting ? "wait" : "pointer",
+                background: collecting ? C.line : C.panel2, color: collecting ? C.sub : C.brass, border: `1px solid ${C.brass}66`, fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap",
+              }}
+            >
+              <RefreshCw size={14} style={collecting ? { animation: "spin 1s linear infinite" } : undefined} /> {collecting ? "수집 중…" : "전체 종목 수집"}
+            </button>
+            <button
+              onClick={() => refreshLive()}
+              disabled={loading}
+              title="지수·확인지표를 최신으로 갱신"
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "9px 13px", borderRadius: 10, cursor: loading ? "wait" : "pointer",
+                background: loading ? C.line : C.brass, color: loading ? C.sub : C.bg, border: "none", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap",
+              }}
+            >
+              <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> {loading ? "갱신 중…" : "지수·지표 갱신"}
+            </button>
+          </div>
         </div>
         <div style={{ fontSize: 12, color: C.dim, marginBottom: 6 }}>
           {lastUpdated
@@ -1826,7 +1877,7 @@ export default function App() {
         <div style={{ fontSize: 10.5, color: liveMsg.includes("실패") ? C.down : C.dim, marginBottom: 18, lineHeight: 1.5, padding: "8px 11px", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           {liveMsg
             ? <>↻ {liveMsg}</>
-            : <>↻ <b style={{ color: C.sub }}>지수·지표 갱신</b>: 지수(NDX·SPX)와 확인지표(VIX·HYG·12M ROC)를 실시간으로 다시 불러옵니다(4~6회 호출, 수초). 종목·섹터·베이스스캔은 장 마감 후 자동 수집분을 쓰며, 종목은 종합 탭에서 검색 시 개별 실시간 조회됩니다.</>}
+            : <>↻ <b style={{ color: C.sub }}>지수·지표 갱신</b>: 지수(QQQ·SPY)와 확인지표(VIX·HYG·12M ROC)를 실시간으로 다시 불러옵니다(수초). <b style={{ color: C.brass }}>전체 종목 수집</b>: S&P500 포함 약 270개 종목을 지금 새로 수집합니다(1~2분). 평소엔 매일 자동 수집분을 사용해요.</>}
         </div>
         <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
