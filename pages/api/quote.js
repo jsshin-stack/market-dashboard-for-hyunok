@@ -5,12 +5,52 @@
 
 const { scoreUniverse, trendChannel, combineScore, multiTrend } = require("../../lib/score");
 
-async function fetchTS(sym, apiKey) {
+async function fetchTSTwelve(sym, apiKey) {
+  if (!apiKey) return null;
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=1day&outputsize=260&timezone=America/New_York&apikey=${apiKey}`;
   const r = await fetch(url);
   const d = await r.json();
   if (d.status === "error" || !d.values) return null;
   return d.values;
+}
+
+// Yahoo Finance 시세(키 불필요, 장중 15~20분 지연). Twelve Data와 같은 형식(values 최신순) 반환.
+async function fetchTSYahoo(sym) {
+  try {
+    const ySym = sym.replace(/\./g, "-");   // BRK.B → BRK-B
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ySym)}?range=2y&interval=1d`;
+    const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; market-dashboard/1.0)" } });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const result = d && d.chart && d.chart.result && d.chart.result[0];
+    if (!result || !result.timestamp || !result.indicators) return null;
+    const ts = result.timestamp;
+    const q = result.indicators.quote && result.indicators.quote[0];
+    if (!q || !q.close) return null;
+    const out = [];
+    for (let i = 0; i < ts.length; i++) {
+      const c = q.close[i];
+      if (c == null) continue;
+      out.push({
+        datetime: new Date(ts[i] * 1000).toISOString().slice(0, 10),
+        open: q.open && q.open[i] != null ? String(q.open[i]) : String(c),
+        high: q.high && q.high[i] != null ? String(q.high[i]) : String(c),
+        low: q.low && q.low[i] != null ? String(q.low[i]) : String(c),
+        close: String(c),
+        volume: q.volume && q.volume[i] != null ? String(q.volume[i]) : "0",
+      });
+    }
+    if (out.length < 60) return null;
+    out.reverse();   // 최신순
+    return out.slice(0, 260);
+  } catch (e) { return null; }
+}
+
+// 통합: Yahoo 우선 + Twelve Data 폴백
+async function fetchTS(sym, apiKey) {
+  const y = await fetchTSYahoo(sym);
+  if (y) return y;
+  return await fetchTSTwelve(sym, apiKey);
 }
 
 async function fetchFundamentals(sym, finnhubKey) {
@@ -32,8 +72,7 @@ async function fetchFundamentals(sym, finnhubKey) {
 }
 
 export default async function handler(req, res) {
-  const apiKey = process.env.TWELVE_DATA_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: "TWELVE_DATA_API_KEY 미설정" });
+  const apiKey = process.env.TWELVE_DATA_API_KEY || null;   // 없어도 Yahoo로 동작(폴백용)
   const finnhubKey = process.env.FINNHUB_API_KEY;
 
   const symbolsParam = (req.query.symbols || "").toString().trim();

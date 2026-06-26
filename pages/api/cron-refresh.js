@@ -293,14 +293,15 @@ export default async function handler(req, res) {
 // 지수·확인지표 수집 (macro.js 로직 축약)
 async function buildMacro(key, idxRef) {
   const out = { idx: {}, confirm: {} };
+  // 지수는 QQQ/SPY로 통일(표시 일관성). Yahoo 우선 + Twelve 폴백(fetchSeries source="yahoo").
   const plan = [
-    { k: "NDX", syms: ["NDX", "QQQ"] },
-    { k: "SPX", syms: ["SPX", "GSPC", "SPY"] },
+    { k: "NDX", syms: ["QQQ"] },
+    { k: "SPX", syms: ["SPY"] },
   ];
   for (const { k, syms } of plan) {
     let s = null, used = null;
     for (const sym of syms) {
-      const v = await timeSeries(sym, key, 280);
+      const v = await fetchSeries(sym, key, 280, "yahoo");
       if (v) { s = v.map((x) => parseFloat(x.close)).filter((n) => !isNaN(n)); used = sym; if (s.length > 100) break; }
     }
     if (!s) { out.idx[k] = { error: "no data" }; continue; }
@@ -308,8 +309,15 @@ async function buildMacro(key, idxRef) {
     const ago = s[Math.min(251, s.length - 1)];
     const roc = ago ? +(((close - ago) / ago) * 100).toFixed(1) : null;
     if (roc != null) { if (k === "NDX") out.confirm.rocNDX = roc; else out.confirm.rocSPX = roc; }
+    // vol20: 최근 20일 연율화 변동성(강도·국면 판정용)
+    let vol20 = null;
+    if (s.length >= 21) {
+      const rets = [];
+      for (let n = 0; n < 20; n++) { const c0 = s[n], c1 = s[n + 1]; if (c0 != null && c1 != null && c1 !== 0) rets.push(c0 / c1 - 1); }
+      if (rets.length >= 10) { const m = rets.reduce((a, b) => a + b, 0) / rets.length; const v = rets.reduce((a, b) => a + (b - m) * (b - m), 0) / rets.length; vol20 = +(Math.sqrt(v) * Math.sqrt(252) * 100).toFixed(1); }
+    }
     out.idx[k] = {
-      close: +close.toFixed(2), source: used, isProxy: used !== k && used !== "GSPC",
+      close: +close.toFixed(2), source: used, isProxy: false,
       prevDay: s[1] != null ? +s[1].toFixed(2) : null,
       prevWeek: s[5] != null ? +s[5].toFixed(2) : null,
       prevMonth: s[21] != null ? +s[21].toFixed(2) : null,
@@ -317,20 +325,21 @@ async function buildMacro(key, idxRef) {
       gapPct: ma ? +(((close - ma) / ma) * 100).toFixed(2) : null,
       slopePct: ma && maOld ? +(((ma - maOld) / maOld) * 100).toFixed(2) : null,
       roc12m: roc,
+      ...(vol20 != null ? { vol20 } : {}),
     };
   }
-  // VIX(→VIXY 프록시), HYG
-  for (const sym of ["VIX", "VIXY"]) {
-    const v = await timeSeries(sym, key, 10);
+  // VIX(Yahoo ^VIX 우선), HYG
+  for (const sym of ["^VIX", "VIX", "VIXY"]) {
+    const v = await fetchSeries(sym, key, 10, "yahoo");
     if (v) {
       const c = v.map((x) => parseFloat(x.close)).filter((n) => !isNaN(n));
       out.confirm.vix = +c[0].toFixed(2);
       out.confirm.vixPrev = c[5] != null ? +c[5].toFixed(2) : null;
-      out.confirm.vixSource = sym; out.confirm.vixProxy = sym !== "VIX";
+      out.confirm.vixSource = sym; out.confirm.vixProxy = sym !== "^VIX" && sym !== "VIX";
       break;
     }
   }
-  const hyg = await timeSeries("HYG", key, 25);
+  const hyg = await fetchSeries("HYG", key, 25, "yahoo");
   if (hyg) {
     const c = hyg.map((x) => parseFloat(x.close)).filter((n) => !isNaN(n));
     out.confirm.hyg20 = c[20] ? +(((c[0] - c[20]) / c[20]) * 100).toFixed(2) : null;

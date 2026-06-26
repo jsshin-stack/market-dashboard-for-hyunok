@@ -976,6 +976,9 @@ function runLevTiming(series, capital, opts = {}) {
   const startIdx = Math.min(Math.max(0, opts.startIdx || 0), series.length - 1);
   const annualCost = 0.009 + (L - 1) * 0.05;
   const dailyCost = annualCost / 252;
+  // 현금 대기 구간 파킹: SGOV(초단기 국채) 연 수익률을 일할 적용(기본 5%). 0이면 미적용.
+  const cashAPY = opts.cashAPY != null ? opts.cashAPY : 0.05;
+  const dailyCashRate = cashAPY > 0 ? Math.pow(1 + cashAPY, 1 / 252) - 1 : 0;
   // 200일선: 전체 series(워밍업 포함)로 계산 → 시작일에도 정확한 추세 판단 가능
   const maAt = (i, n) => {
     if (i < n - 1) return null;
@@ -998,9 +1001,15 @@ function runLevTiming(series, capital, opts = {}) {
   }
   let cash = capital, units = 0;
   let peak = capital, maxDD = 0, switches = 0;
+  let parkDays = 0, parkGain = 0;   // 현금 대기 일수, SGOV로 번 이자 합계
   const equity = [];
   for (let i = startIdx; i < series.length; i++) {
     const px = lev[i];
+    // 현금 보유 중이면 그날 SGOV 이자 먼저 적용(매수 판단 전)
+    if (units === 0 && dailyCashRate > 0 && i > startIdx) {
+      const g = cash * dailyCashRate;
+      cash += g; parkGain += g; parkDays++;
+    }
     const above = aboveTrend(i);
     if (above && units === 0) { units = cash / px; cash = 0; switches++; }
     else if (!above && units > 0) { cash += units * px; units = 0; switches++; }
@@ -1014,11 +1023,48 @@ function runLevTiming(series, capital, opts = {}) {
     retPct: capital > 0 ? ((finalVal - capital) / capital) * 100 : 0,
     maxDD: maxDD * 100, switches, leverage: L, maPeriod: maP, equity,
     warmupDays: startIdx,   // 워밍업에 쓴 일수(0이면 워밍업 없음 → 초기 정확도 낮음)
+    cashAPY, parkDays, parkGain: +parkGain.toFixed(0),   // SGOV 파킹 정보
   };
 }
 
 function diffDaysISO(a, b) {
   return Math.round((new Date(b) - new Date(a)) / 86400000);
+}
+
+/* === 갈아타기(로테이션) 신호 판정 ===
+   보유 종목 하나에 대해 "보유/매도" 신호를 낸다.
+   매도 조건(하나라도 충족): ①+20% 익절  ②매수 후 12개월(365일) 경과  ③200일선 이탈.
+   - d: quote 데이터(aboveMA200, close 등), item: {buyDate, buyPx}
+   - 검증(샌드박스): 이 규칙으로 갈아타면 단순 보유보다 수익↑(낙폭 동일). */
+function rotationSignal(d, item) {
+  if (!d || d.error) return { action: "wait", reason: "데이터 없음" };
+  const reasons = [];
+  let sell = false;
+
+  // ③ 200일선 이탈 — 매수정보 없어도 판정 가능(가장 중요)
+  const below200 = d.aboveMA200 === 0;
+  if (below200) { sell = true; reasons.push("200일선 이탈"); }
+
+  // ① +20% 익절 — 매수가 있을 때
+  let profitPct = null;
+  if (item && item.buyPx != null && d.close != null) {
+    profitPct = (d.close / item.buyPx - 1) * 100;
+    if (profitPct >= 20) { sell = true; reasons.push(`+${profitPct.toFixed(0)}% 익절(목표 +20%)`); }
+  }
+  // ② 12개월 경과 — 매수일 있을 때
+  let heldDays = null;
+  if (item && item.buyDate) {
+    heldDays = diffDaysISO(item.buyDate, new Date().toISOString().slice(0, 10));
+    if (heldDays >= 365) { sell = true; reasons.push(`보유 ${Math.floor(heldDays / 30)}개월(12개월 경과)`); }
+  }
+
+  if (sell) {
+    return { action: "sell", reason: reasons.join(" · "), profitPct, heldDays, below200 };
+  }
+  // 보유 유지
+  let hold = "200일선 위 — 추세 유지 중. 보유.";
+  if (profitPct != null) hold = `수익 ${profitPct >= 0 ? "+" : ""}${profitPct.toFixed(0)}% · 200일선 위 — 보유.`;
+  return { action: "hold", reason: hold, profitPct, heldDays, below200: false };
 }
 
 /* ── 공통 UI ─────────────────────────────────────────────────── */
@@ -1370,6 +1416,7 @@ export default function App() {
   // 즐겨찾기 상태
   const [favTickers, setFavTickers] = useState([]);       // 저장된 티커 목록
   const [favData, setFavData] = useState({});             // {티커: 실시간 조회 결과}
+  const [favItems, setFavItems] = useState([]);           // [{t, buyDate, buyPx}] 매수정보 포함
   const [favLoading, setFavLoading] = useState(false);
   const [favMsg, setFavMsg] = useState("");
 
@@ -1378,7 +1425,7 @@ export default function App() {
     try {
       const r = await fetch("/api/favorites");
       const j = await r.json();
-      if (j.ok) setFavTickers(j.tickers || []);
+      if (j.ok) { setFavTickers(j.tickers || []); setFavItems(j.items || []); }
       return j.tickers || [];
     } catch (e) { return favTickers; }
   }
@@ -1392,7 +1439,20 @@ export default function App() {
         body: JSON.stringify(add ? { add: tk } : { remove: tk }),
       });
       const j = await r.json();
-      if (j.ok) setFavTickers(j.tickers || []);
+      if (j.ok) { setFavTickers(j.tickers || []); setFavItems(j.items || []); }
+    } catch (e) { /* 무시 */ }
+  }
+  // 보유 종목의 매수일·매수가 저장(갈아타기 신호용)
+  async function setFavBuyInfo(ticker, buyDate, buyPx) {
+    const tk = ticker.trim().toUpperCase();
+    if (!tk) return;
+    try {
+      const r = await fetch("/api/favorites", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ add: tk, buyDate: buyDate || null, buyPx: buyPx != null && buyPx !== "" ? buyPx : null }),
+      });
+      const j = await r.json();
+      if (j.ok) { setFavTickers(j.tickers || []); setFavItems(j.items || []); setFavMsg(`${tk} 매수정보 저장됨`); }
     } catch (e) { /* 무시 */ }
   }
   // 즐겨찾기 종목들을 실시간 조회 (탭 열 때마다)
@@ -1738,7 +1798,6 @@ export default function App() {
     { id: "favorites", label: "즐겨찾기", icon: Star },
     { id: "confirm", label: "확인지표", icon: ShieldCheck },
     { id: "sectors", label: "섹터", icon: Layers },
-    { id: "scan", label: "베이스 스캔", icon: TrendingUp },
     { id: "calendar", label: "이벤트", icon: Calendar },
     { id: "lookup", label: "백테스트", icon: FlaskConical },
   ];
@@ -1796,41 +1855,41 @@ export default function App() {
 
     const btOpts = { idxSeries, earnings: meta.earnings, startIdx: baseStart };
     const hold = runBacktest(baseSeries, amt, meta, false, { startIdx: baseStart });
-    const strat = runBacktest(baseSeries, amt, meta, true, btOpts);
 
-    // === 레버리지 타이밍: 종가/20일선 자동선택 ===
+    // === 200일선 자동선택: 종가 vs 20일선(볼린저 중앙선) 교차 ===
     // 종가가 200일선을 교차한 횟수(휩쏘 빈도)로 판단: 12회 이상이면 변동성 큼 → 20일선 교차,
     // 미만이면 추세 깔끔 → 종가 기준. (실데이터 검증: SOXX→20일선, QQQ/NVDA→종가)
+    // 전략(1배)·레버리지(2배) 모두 같은 mode를 공유한다.
     const ma200At = (arr, i) => { if (i < 199) return null; let s = 0; for (let k = i - 199; k <= i; k++) s += arr[k].close; return s / 200; };
     let crosses = 0, prevAbove = null;
     for (let i = 0; i < baseSeries.length; i++) {
       const m = ma200At(baseSeries, i);
       if (m !== null) { const ab = baseSeries[i].close > m; if (prevAbove !== null && ab !== prevAbove) crosses++; prevAbove = ab; }
     }
-    const levMode = crosses >= 12 ? "bb" : "close";
-    const levTiming = runLevTiming(baseSeries, amt, { leverage: 2, maPeriod: 200, startIdx: baseStart, mode: levMode });
-    if (levTiming) { levTiming.mode = levMode; levTiming.crosses = crosses; }
+    const maMode = crosses >= 12 ? "bb" : "close";
 
-    const sigByDate = {};
-    (strat.signals || []).forEach((s) => { sigByDate[s.date] = s; });
+    // 전략 매매 = 단순 200일선(1배): 200일선 위면 보유, 아래면 현금. (복잡한 점수 매매 대체)
+    const strat = runLevTiming(baseSeries, amt, { leverage: 1, maPeriod: 200, startIdx: baseStart, mode: maMode });
+    if (strat) { strat.mode = maMode; strat.crosses = crosses; }
+
+    // 2배+200일선 = 레버리지 버전(같은 mode)
+    const levTiming = runLevTiming(baseSeries, amt, { leverage: 2, maPeriod: 200, startIdx: baseStart, mode: maMode });
+    if (levTiming) { levTiming.mode = maMode; levTiming.crosses = crosses; }
+
     // 모든 라인을 날짜 기반으로 매핑(워밍업 때문에 인덱스가 다를 수 있음)
     const holdByDate = {}; hold.equity.forEach((e) => { holdByDate[e.date] = e.value; });
-    const stratByDate = {}; strat.equity.forEach((e) => { stratByDate[e.date] = e.value; });
+    const stratByDate = {}; if (strat && strat.equity) strat.equity.forEach((e) => { stratByDate[e.date] = e.value; });
     const levByDate = {};
     if (levTiming && levTiming.equity) levTiming.equity.forEach((e) => { levByDate[e.date] = e.value; });
     const chart = series.map((p) => {
-      const sig = sigByDate[p.date];
       return {
         date: p.date,
         "매수후보유": (p.date in holdByDate) ? holdByDate[p.date] : null,
-        "전략": (p.date in stratByDate) ? stratByDate[p.date] : null,
+        "200일선": (p.date in stratByDate) ? stratByDate[p.date] : null,
         "2배+200일": (p.date in levByDate) ? levByDate[p.date] : null,
-        sigType: sig ? sig.type : null,
-        sigKind: sig ? (sig.kind || null) : null,
-        sigValue: sig ? stratByDate[p.date] : null,
       };
     });
-    setBtResult({ tk, meta, amt, series, hold, strat, levTiming, chart, isReal: source === "실제 API", source });
+    setBtResult({ tk, meta, amt, series, hold, strat, levTiming, chart, maMode, crosses, isReal: source === "실제 API", source });
   };
 
   return (
@@ -2125,10 +2184,10 @@ export default function App() {
         {/* ── 즐겨찾기 ── */}
         {tab === "favorites" && (
           <>
-            <SectionTitle icon={Star} sub="저장 종목의 데일리 매수/보유/매도 체크">즐겨찾기</SectionTitle>
+            <SectionTitle icon={Star} sub="보유 종목의 갈아타기 신호(파세요/사세요)">즐겨찾기 · 갈아타기</SectionTitle>
             <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 2px 12px" }}>
               <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.5, flex: 1 }}>
-                종합 탭에서 종목 검색 후 '즐겨찾기 추가'로 누적됩니다. 탭을 열 때마다 실시간 조회해 종목별 행동(매수·보유·매도)을 판정합니다. (모든 사용자 공유 목록)
+                보유 종목의 <b>매수일·매수가</b>를 입력하면 갈아타기 신호를 줍니다. 매도 조건: <b>+20% 익절 / 12개월 경과 / 200일선 이탈</b> 중 하나. '파세요'가 뜨면 새로 200일선을 돌파한 종목을 매수 후보로 제안합니다. (모든 사용자 공유 목록)
               </div>
               <button onClick={() => refreshFavorites()} disabled={favLoading} style={{
                 display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8,
@@ -2138,6 +2197,49 @@ export default function App() {
               </button>
             </div>
             {favMsg && <div style={{ fontSize: 10.5, color: favMsg.includes("실패") ? C.down : C.dim, marginBottom: 10 }}>{favMsg}</div>}
+
+            {/* 갈아타기 추천: '파세요' 종목이 있으면 신규 200일선 돌파 종목을 매수 후보로 제시 */}
+            {(() => {
+              const sellList = favTickers.filter((tk) => {
+                const d = favData[tk]; if (!d || d.error) return false;
+                const item = favItems.find((x) => x.t === tk) || {};
+                return rotationSignal(d, item).action === "sell";
+              });
+              if (sellList.length === 0) return null;
+              // 매수 후보: 최근 200일선 돌파 종목(보유 중이 아닌 것), 점수순 상위 5
+              const favSet = new Set(favTickers);
+              const buyCands = allStocks
+                .filter((s) => s.analyzed && s.crossedMA200_7d && !favSet.has(s.t))
+                .sort((a, b) => (b.score || 0) - (a.score || 0))
+                .slice(0, 5);
+              return (
+                <Card style={{ marginBottom: 12, borderColor: `${C.brass}55`, background: `${C.brass}0C` }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 800, color: C.brass, marginBottom: 6 }}>↻ 갈아타기 제안</div>
+                  <div style={{ fontSize: 11, color: C.sub, lineHeight: 1.6, marginBottom: 8 }}>
+                    <b style={{ color: C.down }}>{sellList.join(", ")}</b>이(가) 매도 조건(+20% 익절·12개월 경과·200일선 이탈)에 도달했습니다.
+                    아래는 그 자금으로 갈아탈 수 있는 <b style={{ color: C.brass }}>새로 200일선을 돌파한 종목</b>입니다.
+                  </div>
+                  {buyCands.length === 0 ? (
+                    <div style={{ fontSize: 11, color: C.dim }}>지금은 새로 돌파한 추천 종목이 없습니다. 200일선 위 종목으로 분산하거나 현금(SGOV) 대기를 고려하세요.</div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {buyCands.map((s) => (
+                        <button key={s.t} onClick={() => { setOvSelected(s.t); setTab("overview"); fetchOne(s.t); }} style={{
+                          display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 11px", borderRadius: 8,
+                          background: C.panel2, border: `1px solid ${C.brass}33`, cursor: "pointer", textAlign: "left", width: "100%",
+                        }}>
+                          <span style={{ fontSize: 12.5, fontWeight: 700, color: C.text }}>
+                            <span style={{ color: C.up }}>사세요 ▸ </span>{s.t}
+                            <span style={{ fontSize: 10, color: C.dim, marginLeft: 6 }}>{s.name || s.sector}</span>
+                          </span>
+                          <span style={{ fontSize: 9.5, color: C.violet }}>200일선 돌파 · {s.score != null ? `${s.score}점` : ""}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              );
+            })()}
 
             {favTickers.length === 0 ? (
               <Card style={{ textAlign: "center", color: C.dim, fontSize: 13, padding: "28px 16px" }}>
@@ -2163,15 +2265,22 @@ export default function App() {
                   // 실시간 데이터로 매수/보유/매도 판정
                   const stObj = { t: tk, name: d.name, sector: "즐겨찾기", color: C.brass, c: d.c, score: d.score, pull: d.pull, close: d.close, atr: d.atr, per: d.per, pbr: d.pbr, imminent: d.imminent, analyzed: true };
                   const ta = tradeAction(stObj, { NDX: ndx, SPX: spx }, conf);
+                  // 갈아타기(로테이션) 신호: 보유 종목의 매수정보 기준
+                  const item = favItems.find((x) => x.t === tk) || {};
+                  const rot = rotationSignal(d, item);
+                  const rotColor = rot.action === "sell" ? C.down : rot.action === "hold" ? C.up : C.dim;
+                  const rotLabel = rot.action === "sell" ? "파세요" : rot.action === "hold" ? "보유" : "—";
                   return (
-                    <Card key={tk} style={{ borderLeft: `3px solid ${ta.color}` }}>
+                    <Card key={tk} style={{ borderLeft: `3px solid ${rotColor}` }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
                             <span style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{tk}</span>
+                            <span style={{ fontSize: 11, fontWeight: 800, padding: "2px 9px", borderRadius: 999, background: `${rotColor}22`, color: rotColor }}>{rotLabel}</span>
                             {d.name && <span style={{ fontSize: 11.5, color: C.sub }}>{d.name}</span>}
                             {d.imminent ? <span style={{ fontSize: 9, color: C.amber }}>⚡ 돌파임박</span> : null}
                           </div>
+                          <div style={{ fontSize: 11, color: rotColor, marginTop: 4, fontWeight: 600 }}>↻ {rot.reason}</div>
                           <div style={{ display: "flex", gap: 12, marginTop: 4, fontSize: 11, color: C.sub, flexWrap: "wrap" }}>
                             {d.close != null && <span>현재가 <b style={{ color: C.text }}>${d.close.toLocaleString()}</b></span>}
                             {d.combined
@@ -2188,6 +2297,22 @@ export default function App() {
                               <span style={{ color: C.up }}>익절 ${ta.lvl.target}</span>
                             </div>
                           )}
+                          {/* 매수정보 입력(갈아타기 신호용) */}
+                          <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 10, color: C.dim }}>매수일</span>
+                            <input type="date" defaultValue={item.buyDate || ""}
+                              onBlur={(e) => setFavBuyInfo(tk, e.target.value, item.buyPx)}
+                              style={{ fontSize: 11, padding: "3px 6px", borderRadius: 6, border: `1px solid ${C.line}`, background: C.panel, color: C.text }} />
+                            <span style={{ fontSize: 10, color: C.dim }}>매수가 $</span>
+                            <input type="number" step="0.01" placeholder="0.00" defaultValue={item.buyPx != null ? item.buyPx : ""}
+                              onBlur={(e) => setFavBuyInfo(tk, item.buyDate, e.target.value)}
+                              style={{ fontSize: 11, padding: "3px 6px", borderRadius: 6, border: `1px solid ${C.line}`, background: C.panel, color: C.text, width: 80 }} />
+                            {rot.profitPct != null && (
+                              <span style={{ fontSize: 10, color: rot.profitPct >= 0 ? C.up : C.down }}>
+                                현재 {rot.profitPct >= 0 ? "+" : ""}{rot.profitPct.toFixed(1)}%
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div style={{ textAlign: "right", flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
                           <span style={{ padding: "5px 12px", borderRadius: 999, background: `${ta.color}22`, color: ta.color, fontSize: 13, fontWeight: 800 }}>{ta.action}</span>
@@ -2485,7 +2610,8 @@ export default function App() {
         {/* ── 백테스트 ── */}
         {tab === "lookup" && (
           <>
-            <SectionTitle icon={FlaskConical} sub="종목·기간·금액 입력 → 매수후보유 vs 전략 비교">백테스트</SectionTitle>
+            <SectionTitle icon={FlaskConical} sub="종목·기간·금액 입력 → 매수후보유 vs 200일선 비교">백테스트</SectionTitle>
+            <div style={{ fontSize: 9.5, color: C.dim, margin: "-6px 2px 8px" }}>빌드 v2.1 · 200일선 단순전략 + SGOV 현금파킹 + 워밍업 + Yahoo 데이터</div>
 
             <Card style={{ marginBottom: 14 }}>
               <div style={{ marginBottom: 12 }}>
@@ -2550,7 +2676,7 @@ export default function App() {
                 <div style={{ display: "grid", gridTemplateColumns: btResult.levTiming ? "1fr 1fr 1fr" : "1fr 1fr", gap: 10, marginBottom: 12 }}>
                   {[
                     { key: "hold", title: "매수 후 보유", icon: Wallet, sub: "시작일 전액 매수 → 보유", r: btResult.hold, accent: C.blue },
-                    { key: "strat", title: "전략 매매", icon: Target, sub: "C1~C5 점수: 4점↑매수·2점↓매도", r: btResult.strat, accent: C.brass },
+                    { key: "strat", title: "200일선", icon: Target, sub: "200일선 위면 보유·아래면 현금", r: btResult.strat, accent: C.brass },
                     ...(btResult.levTiming ? [{ key: "lev", title: "2배+200일선", icon: Zap, sub: "200일선 위에서만 2배 보유", r: btResult.levTiming, accent: C.violet }] : []),
                   ].map((b) => {
                     const up = b.r.profit >= 0;
@@ -2567,11 +2693,22 @@ export default function App() {
                           {up ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}{up ? "+" : ""}{b.r.retPct.toFixed(1)}% ({up ? "+" : ""}${b.r.profit.toLocaleString(undefined, { maximumFractionDigits: 0 })})
                         </div>
                         <div style={{ fontSize: 10, color: C.dim, marginTop: 8, lineHeight: 1.5 }}>
-                          최대낙폭 {b.r.maxDD.toFixed(1)}%{b.key === "strat" ? ` · 매매 ${b.r.trades}회` : ""}{b.key === "lev" ? ` · 전환 ${b.r.switches}회` : ""}
+                          최대낙폭 {b.r.maxDD.toFixed(1)}%{b.key === "strat" ? ` · 전환 ${b.r.switches}회` : ""}{b.key === "lev" ? ` · 전환 ${b.r.switches}회` : ""}
                           {b.key === "strat" && (
                             <div style={{ marginTop: 3, fontSize: 9, color: C.dim, lineHeight: 1.5 }}>
-                              손절 {b.r.stops || 0} · 추적손절 {b.r.trails || 0} · 익절 {b.r.takes || 0}
-                              {(b.r.skipsRR || b.r.skipsEarn) ? ` · 진입거름(손익비 ${b.r.skipsRR || 0}/실적 ${b.r.skipsEarn || 0})` : ""}
+                              {b.r.mode && (
+                                <div style={{ color: C.brass }}>
+                                  {b.r.mode === "bb"
+                                    ? `변동성 큼(교차 ${b.r.crosses}회) → 20일선(볼린저중앙) 기준`
+                                    : `추세 깔끔(교차 ${b.r.crosses}회) → 종가 기준`}
+                                </div>
+                              )}
+                              {b.r.warmupDays > 0
+                                ? <div>200일선 워밍업 {b.r.warmupDays}일 적용 — 시작일부터 정확</div>
+                                : <div style={{ color: C.down }}>⚠ 워밍업 데이터 부족 — 초기 부정확</div>}
+                              {b.r.parkDays > 0 && (
+                                <div style={{ color: C.up }}>현금 {b.r.parkDays}일 SGOV 파킹(연 {(b.r.cashAPY * 100).toFixed(0)}%) → 이자 +${b.r.parkGain.toLocaleString()}</div>
+                              )}
                             </div>
                           )}
                           {b.key === "lev" && (
@@ -2587,6 +2724,9 @@ export default function App() {
                               {b.r.warmupDays > 0
                                 ? <div style={{ color: C.dim }}>200일선 워밍업 {b.r.warmupDays}일 적용 — 시작일부터 정확</div>
                                 : <div style={{ color: C.down }}>⚠ 워밍업 데이터 부족 — 초기 구간 판단 부정확</div>}
+                              {b.r.parkDays > 0 && (
+                                <div style={{ color: C.up }}>현금 {b.r.parkDays}일 SGOV 파킹(연 {(b.r.cashAPY * 100).toFixed(0)}%) → 이자 +${b.r.parkGain.toLocaleString()}</div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -2603,10 +2743,10 @@ export default function App() {
                   return (
                     <Card style={{ marginBottom: 14, background: `${c}10`, borderColor: `${c}44` }}>
                       <div style={{ fontSize: 12.5, color: C.text, lineHeight: 1.7 }}>
-                        <b style={{ color: c }}>{stratWin ? "전략 매매" : "매수 후 보유"}</b>가 이 기간 동안
+                        <b style={{ color: c }}>{stratWin ? "200일선" : "매수 후 보유"}</b>가 이 기간 동안
                         <b style={{ color: c }}> ${Math.abs(diff).toLocaleString(undefined, { maximumFractionDigits: 0 })}</b> 더 우수했습니다.
                         {stratWin
-                          ? " 전략이 하락 구간에서 현금화해 낙폭을 줄인 효과입니다."
+                          ? " 200일선 규칙이 하락 구간에서 현금화해 낙폭을 줄인 효과입니다."
                           : " 추세가 꾸준해 매매 전환 없이 보유하는 편이 나았던 구간입니다."}
                       </div>
                     </Card>
@@ -2635,37 +2775,31 @@ export default function App() {
                         {btResult.levTiming && (
                           <Line type="monotone" dataKey="2배+200일" stroke={C.violet} dot={false} strokeWidth={1.7} strokeDasharray="5 3" />
                         )}
-                        <Line type="monotone" dataKey="전략" stroke={C.brass} strokeWidth={2}
-                          dot={(props) => {
-                            const { cx, cy, payload } = props;
-                            if (!payload || !payload.sigType) return <g key={props.key} />;
-                            const isBuy = payload.sigType === "buy";
-                            const col = isBuy ? C.up : C.down;
-                            return (
-                              <g key={props.key}>
-                                <circle cx={cx} cy={cy} r={4} fill={col} stroke={C.bg} strokeWidth={1.5} />
-                              </g>
-                            );
-                          }} />
+                        <Line type="monotone" dataKey="200일선" stroke={C.brass} dot={false} strokeWidth={2} />
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
                   <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6, display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap" }}>
-                    <span><span style={{ color: C.up }}>●</span> 분할 매수</span>
-                    <span><span style={{ color: C.down }}>●</span> 분할 매도(추세꺾임/추적손절)</span>
+                    <span><span style={{ color: C.blue }}>━</span> 매수후보유</span>
+                    <span><span style={{ color: C.brass }}>━</span> 200일선(1배)</span>
                     {btResult.levTiming && <span><span style={{ color: C.violet }}>┄</span> 2배+200일선</span>}
-                    <span>총 {btResult.strat.trades}회 체결 (추적손절 {btResult.strat.trails})</span>
+                    {btResult.strat && <span>전환 {btResult.strat.switches}회</span>}
                   </div>
                   <div style={{ fontSize: 9.5, color: C.dim, marginTop: 4, textAlign: "center", lineHeight: 1.5 }}>
-                    전략: 진입 50% + 고점대비 −5/−10/−15% 분할매수(MACD 반등확인) · 추세꺾임+C≤2 또는 추적손절 −25%에서 1/3씩 분할매도.
-                    낙폭 방어 중심 — 강한 상승장에선 바이앤홀드가 더 유리할 수 있습니다.
+                    {btResult.strat && (
+                      <div>
+                        200일선(1배): 200일 이동평균선 위에서만 보유하고 아래로 내려가면 현금으로 빠집니다.
+                        {btResult.strat.mode === "bb"
+                          ? " 이 종목은 변동성이 커서 가짜 신호(휩쏘)가 많아, 20일선(볼린저 밴드 중앙선)이 200일선을 교차하는 시점으로 매매합니다(노이즈 제거)."
+                          : " 이 종목은 추세가 깔끔해서 종가가 200일선을 교차하는 시점으로 매매합니다(빠른 진입)."}
+                        {" "}낙폭 방어 중심 — 강한 상승장에선 매수후보유가 더 유리할 수 있습니다.
+                        {btResult.strat.parkDays > 0 && " 현금으로 빠진 기간엔 SGOV(초단기 국채, 연 5%)에 넣어 이자를 받는 것으로 계산했습니다."}
+                      </div>
+                    )}
                     {btResult.levTiming && (
                       <div style={{ marginTop: 4, color: C.amber }}>
-                        2배+200일선: 종목을 2배로 추종하되 200일 이동평균선 위에서만 보유(아래면 현금).
-                        {btResult.levTiming.mode === "bb"
-                          ? " 이 종목은 변동성이 커서 가짜 신호(휩쏘)가 많아, 20일선이 200일선을 교차하는 시점으로 매매합니다(노이즈 제거)."
-                          : " 이 종목은 추세가 깔끔해서 종가가 200일선을 교차하는 시점으로 매매합니다(빠른 진입)."}
-                        {" "}백테스트상 위험대비 수익이 좋았으나, 단일 종목 레버리지는 변동성 끌림·갭하락 위험이 크고 과거 강세장 결과가 미래에 재현된다는 보장이 없습니다. 참고용입니다.
+                        2배+200일선: 위와 같은 200일선 규칙을 2배 레버리지로 추종합니다.
+                        {" "}단일 종목 레버리지는 변동성 끌림·갭하락 위험이 크고 과거 강세장 결과가 미래에 재현된다는 보장이 없습니다. 참고용입니다.
                       </div>
                     )}
                   </div>

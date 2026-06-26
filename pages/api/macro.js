@@ -4,7 +4,7 @@
 // 반환: { ok, idx: { NDX:{close,prevDay,maVal,gapPct,...}, SPX:{...} }, confirm:{ vix, hyg20, ... } }
 // 주의: 일부 무료 플랜은 지수(NDX 등) 접근이 제한될 수 있어, 실패 시 해당 항목만 null로 반환합니다.
 
-async function fetchSeries(symbol, apiKey, size = 260) {
+async function fetchSeriesTwelve(symbol, apiKey, size = 260) {
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=1day&outputsize=${size}&timezone=America/New_York&apikey=${apiKey}`;
   const r = await fetch(url);
   const d = await r.json();
@@ -12,11 +12,52 @@ async function fetchSeries(symbol, apiKey, size = 260) {
   const closes = d.values.map((v) => parseFloat(v.close)).filter((n) => !isNaN(n));
   return { closes, values: d.values };
 }
+
+// Yahoo Finance 시계열(키 불필요). Twelve Data와 같은 형식({closes, values})으로 반환.
+// 무료 Yahoo는 장중 15~20분 지연이지만, 종가만 주는 Twelve보다 최신이라 우선 사용.
+async function fetchSeriesYahoo(symbol, size = 260) {
+  try {
+    // Yahoo 심볼 변환: 지수는 ^ 접두사(VIX→^VIX), 클래스주는 하이픈(BRK.B→BRK-B)
+    const ySym = symbol.replace(/\./g, "-");
+    const range = size > 240 ? "2y" : (size > 30 ? "1y" : "1mo");
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ySym)}?range=${range}&interval=1d`;
+    const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; market-dashboard/1.0)" } });
+    if (!r.ok) return { error: "yahoo http " + r.status };
+    const d = await r.json();
+    const result = d && d.chart && d.chart.result && d.chart.result[0];
+    if (!result || !result.timestamp || !result.indicators) return { error: "yahoo 형식 오류" };
+    const ts = result.timestamp;
+    const q = result.indicators.quote && result.indicators.quote[0];
+    if (!q || !q.close) return { error: "yahoo 종가 없음" };
+    const values = [];
+    for (let i = 0; i < ts.length; i++) {
+      const c = q.close[i];
+      if (c == null) continue;
+      values.push({ datetime: new Date(ts[i] * 1000).toISOString().slice(0, 10), close: String(c) });
+    }
+    if (values.length < 6) return { error: "yahoo 데이터 부족" };
+    values.reverse();   // 최신순(Twelve Data와 동일)
+    const trimmed = values.slice(0, size);
+    return { closes: trimmed.map((v) => parseFloat(v.close)).filter((n) => !isNaN(n)), values: trimmed };
+  } catch (e) {
+    return { error: "yahoo 예외: " + (e.message || String(e)) };
+  }
+}
+
+// 통합 진입점: Yahoo 우선, 실패 시 Twelve Data 폴백.
+async function fetchSeries(symbol, apiKey, size = 260) {
+  const y = await fetchSeriesYahoo(symbol, size);
+  if (!y.error && y.closes && y.closes.length >= 6) return y;
+  if (apiKey) {
+    const t = await fetchSeriesTwelve(symbol, apiKey, size);
+    if (!t.error) return t;
+  }
+  return y.error ? y : { error: "데이터 없음" };
+}
 function avg(arr) { return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null; }
 
 export default async function handler(req, res) {
-  const apiKey = process.env.TWELVE_DATA_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: "API 키 미설정 (TWELVE_DATA_API_KEY)" });
+  const apiKey = process.env.TWELVE_DATA_API_KEY || null;   // 없어도 Yahoo로 동작(폴백용)
 
   try {
     const out = { ok: true, idx: {}, confirm: {} };
@@ -76,9 +117,9 @@ export default async function handler(req, res) {
       };
     }
 
-    // --- 확인지표: VIX (지수 → 프록시 폴백), HYG (일반 ETF) ---
+    // --- 확인지표: VIX (Yahoo는 ^VIX, Twelve는 VIX) ---
     let vixData = null, vixSym = null;
-    for (const sym of ["VIX", "VIXY"]) {   // VIXY는 VIX와 스케일이 비교적 근접
+    for (const sym of ["^VIX", "VIX", "VIXY"]) {
       const r = await fetchSeries(sym, apiKey, 10);
       if (!r.error && r.closes && r.closes.length >= 6) { vixData = r; vixSym = sym; break; }
     }
@@ -86,7 +127,7 @@ export default async function handler(req, res) {
       out.confirm.vix = +vixData.closes[0].toFixed(2);
       out.confirm.vixPrev = vixData.closes[5] != null ? +vixData.closes[5].toFixed(2) : null;
       out.confirm.vixSource = vixSym;
-      out.confirm.vixProxy = vixSym !== "VIX";   // 프록시면 절대값은 참고용(추세만 유효)
+      out.confirm.vixProxy = vixSym !== "^VIX" && vixSym !== "VIX";   // VIXY 폴백 시만 프록시
     }
     const hyg = await fetchSeries("HYG", apiKey, 25);
     if (!hyg.error) {
